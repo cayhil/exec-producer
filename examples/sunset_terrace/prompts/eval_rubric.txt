@@ -1,0 +1,28 @@
+You are scoring a generated reality-TV scene script. Be rigorous and specific — cite actual lines from the script when you find problems. Scoring scale: 1-3 = broken, 4-6 = usable with real problems, 7-8 = good, 9-10 = excellent.
+
+=== CRITERION 1: FORMAT ADHERENCE ===
+Every dialogue line was generated under these rules. Score how well the script follows them:
+
+__CRITICAL_RULES__
+
+=== CRITERION 2: CHARACTER VOICE CONSISTENCY ===
+Each character must sound like themselves — distinct from the others, consistent across the scene, and true to their personality sheet:
+
+__CAST_SHEET__
+
+=== CRITERION 3: PACING & ESCALATION ===
+The scene's tone and escalation must match this point in the season arc. Too-fast escalation, zero filler, and every-line-is-a-mic-drop are failures at any intensity:
+
+__INTENSITY__
+
+=== THE SCRIPT ===
+__SCRIPT__
+
+=== OUTPUT ===
+Respond with ONLY valid JSON in exactly this shape:
+{
+  "format_adherence": {"score": <1-10>, "notes": "<what worked, what broke>", "violations": ["<quoted example of a violation>", "..."]},
+  "voice_consistency": {"score": <1-10>, "notes": "<who sounded right, who drifted>", "weakest_character": "<name or null>"},
+  "pacing": {"score": <1-10>, "notes": "<did the escalation fit the intensity level?>"},
+  "overall": {"score": <1-10>, "summary": "<one short paragraph>"}
+}

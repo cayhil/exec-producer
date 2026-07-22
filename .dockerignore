@@ -1,0 +1,23 @@
+# Keep the image lean — and keep private show content out of the build
+# context entirely (mirrors the .gitignore privacy guards).
+.git
+.venv
+.env
+.pytest_cache
+__pycache__
+scripts/
+data/
+chapters/
+archive/
+CLAUDE.md
+HANDOFF.md
+txt_to_docx.py
+docx_to_md.py
+pdf_to_md.py
+*_concept.*
+*_bible*
+*.pdf
+*-transcript.md
+*.docx
+.claude/
+.DS_Store

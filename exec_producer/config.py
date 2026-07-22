@@ -1,0 +1,194 @@
+"""Data loading — all creative content lives in a show directory as
+JSON/text files. The directory is swappable: `--data-dir <path>` (or the
+EXEC_PRODUCER_DATA_DIR env var) points the engine at any show."""
+
+import hashlib
+import json
+import os
+import re
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+from . import __version__
+from .errors import ConfigError
+
+load_dotenv()
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+
+# The data contract: a show directory must provide all of these. Optional
+# additions: voices.json (--audio), visuals.json (--video),
+# prompts/planner.txt (--planner).
+REQUIRED_FILES = [
+    "world.json", "cast.json", "scenes.json", "episodes.json", "embodiment.json",
+    "prompts/character_template.txt", "prompts/director.txt",
+    "prompts/director_choice.txt", "prompts/casting.txt",
+    "prompts/production.txt", "prompts/production_request.txt",
+    "prompts/judge.txt", "prompts/eval_rubric.txt",
+    "prompts/critical_rules.txt", "prompts/tone_face_to_face.txt",
+    "prompts/tone_confessional_early.txt", "prompts/tone_confessional_late.txt",
+]
+
+
+def resolve_data_dir():
+    """--data-dir/env var wins; otherwise the private data/ in the repo
+    root; otherwise the committed starter show, so a fresh clone runs
+    without any setup."""
+    env = os.environ.get("EXEC_PRODUCER_DATA_DIR")
+    if env:
+        return Path(env).expanduser().resolve()
+    private = _REPO_ROOT / "data"
+    if private.is_dir():
+        return private
+    starter = _REPO_ROOT / "examples" / "sunset_terrace"
+    if starter.is_dir():
+        print(f"ℹ️  No data/ directory — using the starter show at {starter}")
+        return starter
+    return private  # validate_data_dir turns this into the legible error
+
+
+def validate_data_dir(path):
+    """List every contract violation at once. Pure, so a broken show
+    directory can be diagnosed without importing the rest of the engine."""
+    path = Path(path)
+    if not path.is_dir():
+        return [f"{path} is not a directory"]
+    return [f for f in REQUIRED_FILES if not (path / f).is_file()]
+
+
+DATA_DIR = resolve_data_dir()
+_missing = validate_data_dir(DATA_DIR)
+if _missing:
+    raise ConfigError(
+        f"show directory {DATA_DIR} doesn't satisfy the data contract — missing:\n"
+        + "\n".join(f"     - {m}" for m in _missing)
+        + "\n   See CREATING_A_SHOW.md for the full contract."
+    )
+
+# Audit trail: sha256 of every config/prompt file loaded this run, so any
+# saved output can be traced back to the exact inputs that produced it.
+CONFIG_MANIFEST = {}
+
+
+def _load_bytes(filename):
+    raw = (DATA_DIR / filename).read_bytes()
+    CONFIG_MANIFEST[filename] = hashlib.sha256(raw).hexdigest()
+    return raw
+
+
+def _load_json(filename):
+    """Load a JSON file from the data directory."""
+    return json.loads(_load_bytes(filename))
+
+
+def _load_text(filename):
+    """Load a text file from the data directory."""
+    return _load_bytes(filename).decode()
+
+
+# Core data
+_world_config = _load_json("world.json")
+WORLD = _world_config["world"]
+INTENSITY_GUIDE = _world_config["intensity_guide"]
+DIRECTOR_MODEL = _world_config["director_model"]
+# Judge defaults to the director model, but should be a different one:
+# a director grading its own decisions is the classic LLM-as-judge
+# self-preference trap.
+JUDGE_MODEL = _world_config.get("judge_model", _world_config["director_model"])
+PROVIDER_ENV_KEYS = _world_config["provider_env_keys"]
+
+# Show identity — banners and output-file prefixes. Defaults keep older
+# world.json files (without the keys) working.
+SHOW_NAME = _world_config.get("show_name", "UNTITLED SHOW")
+SHOW_SLUG = _world_config.get("show_slug", "show")
+
+# Reliability: retries/timeouts/fallbacks for every LiteLLM call.
+# Defaults apply when world.json has no "reliability" block, so show data
+# written before this feature keeps working unchanged.
+_DEFAULT_RELIABILITY = {
+    "num_retries": 3,
+    "timeout_seconds": 120,
+    "fallbacks": {},
+}
+RELIABILITY = {**_DEFAULT_RELIABILITY, **_world_config.get("reliability", {})}
+
+# Content-rating gate: when world.json sets content_rating.max_intensity,
+# every scene/episode intensity is capped at that level regardless of what
+# the episode config or CLI asks for — a guardrail for public/demo runs.
+MAX_INTENSITY = _world_config.get("content_rating", {}).get("max_intensity")
+
+CAST = _load_json("cast.json")
+SCENES = _load_json("scenes.json")
+EPISODES = _load_json("episodes.json")
+
+# Show identifiers become output paths and ffmpeg concat-list entries — a
+# slug or key with '/', '..', quotes, or control characters would let a
+# hostile show directory write outside scripts/. Reject at load, listing
+# every offender.
+_SAFE_ID = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+def _require_safe_ids(source, ids):
+    bad = sorted(str(i) for i in ids if not _SAFE_ID.fullmatch(str(i)))
+    if bad:
+        raise ConfigError(
+            f"{source} identifiers must be filename-safe ([A-Za-z0-9_-]): "
+            + ", ".join(repr(b) for b in bad))
+
+
+_require_safe_ids("world.json show_slug", [SHOW_SLUG])
+_require_safe_ids("cast.json", CAST.keys())
+_require_safe_ids("scenes.json", SCENES.keys())
+_require_safe_ids("episodes.json", EPISODES.keys())
+
+# Prompt templates
+DIRECTOR_SYSTEM = _load_text("prompts/director.txt").replace("__WORLD__", WORLD)
+PRODUCTION_SYSTEM = _load_text("prompts/production.txt")
+EVAL_RUBRIC = _load_text("prompts/eval_rubric.txt")
+CASTING_TEMPLATE = _load_text("prompts/casting.txt")
+DIRECTOR_CHOICE_TEMPLATE = _load_text("prompts/director_choice.txt")
+PRODUCTION_REQUEST_TEMPLATE = _load_text("prompts/production_request.txt")
+JUDGE_SYSTEM = _load_text("prompts/judge.txt")
+
+# Character prompt components
+CHARACTER_TEMPLATE = _load_text("prompts/character_template.txt")
+CRITICAL_RULES = _load_text("prompts/critical_rules.txt")
+TONE_FACE_TO_FACE = _load_text("prompts/tone_face_to_face.txt")
+TONE_CONFESSIONAL_EARLY = _load_text("prompts/tone_confessional_early.txt")
+TONE_CONFESSIONAL_LATE = _load_text("prompts/tone_confessional_late.txt")
+EMBODIMENT = _load_json("embodiment.json")
+
+def load_voices():
+    """Load data/voices.json for the --audio stage. On demand, not at import:
+    a missing voices file must never break non-audio runs. Going through
+    _load_bytes adds its sha256 to CONFIG_MANIFEST, and AUDIT holds that dict
+    by reference — so audio runs carry the voices file in their audit trail
+    as long as this is called before any output (or the run-log header) is
+    written. The CLI preflight does exactly that."""
+    return _load_json("voices.json")
+
+
+def load_planner_prompt():
+    """Load the --planner arc-writer system prompt — same on-demand +
+    audit-manifest contract as load_voices(): data/ sets without the file
+    must not break non-planner runs."""
+    return _load_text("prompts/planner.txt").replace("__WORLD__", WORLD)
+
+
+def load_visuals():
+    """Load data/visuals.json for the --video stage — same on-demand +
+    audit-manifest contract as load_voices(). The file is optional: the
+    video stage falls back to built-in card defaults when it's absent."""
+    return _load_json("visuals.json")
+
+
+# Audit block embedded in every saved output and at the top of the JSONL run
+# log: exactly which engine version, models, and config-file contents (by
+# hash) produced a given script.
+AUDIT = {
+    "engine_version": __version__,
+    "director_model": DIRECTOR_MODEL,
+    "judge_model": JUDGE_MODEL,
+    "config_files": CONFIG_MANIFEST,
+}

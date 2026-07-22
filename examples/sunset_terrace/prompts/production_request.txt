@@ -1,0 +1,15 @@
+SCENE: __SCENE_NAME__
+MOOD: __SCENE_MOOD__
+SETTING: __SCENE_PROMPT__
+
+CAST IN THIS SCENE:
+__CAST_VISUAL__
+
+FULL SCRIPT:
+__SCRIPT__
+
+Break this into visual beats (2-3 dialogue lines each). For each beat, generate:
+1. A Gemini image prompt (9:16 vertical, detailed scene description)
+2. A Veo 3 video prompt (action + spoken dialogue, 5-8 seconds)
+
+Output ONLY valid JSON.

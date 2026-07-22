@@ -1,0 +1,17 @@
+SCENE: __SCENE_NAME__
+PREMISE: __SCENE_PROMPT__
+MOOD: __SCENE_MOOD__
+__PLOT__
+__INTENSITY__
+__PLAN__
+CAST IN THE HOUSE:
+__CAST_DESCRIPTIONS__
+
+CONVERSATION SO FAR:
+__CONVERSATION__
+
+LAST SPEAKER: __LAST_SPEAKER__
+SPEAKERS SO FAR: __SPEAKERS__
+HAVEN'T SPOKEN YET: __NOT_YET__
+
+Who speaks next? Remember: create compelling TV. MATCH THE INTENSITY LEVEL. If someone HASN'T SPOKEN YET, strongly consider giving them a moment. Output ONLY valid JSON.
