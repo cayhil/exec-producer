@@ -360,6 +360,26 @@ def test_generate_veo_clip_times_out():
                                  timeout_seconds=0)
 
 
+def test_poll_veo_operation_surfaces_operation_error():
+    # A done-but-failed operation must raise the API's own message, not die
+    # on op.response.generated_videos[0] — the beat receipt records the
+    # exception name, and "RuntimeError" beats "AttributeError".
+    from types import SimpleNamespace
+    failed = SimpleNamespace(done=True, error={"code": 8, "message": "quota exhausted"},
+                             response=None)
+    with pytest.raises(RuntimeError, match="quota exhausted"):
+        video.poll_veo_operation(object(), failed, poll_seconds=0, timeout_seconds=60)
+
+
+def test_poll_veo_operation_rejects_empty_result():
+    # Success shell, no videos (safety-filtered): a legible error, no crash.
+    from types import SimpleNamespace
+    empty = SimpleNamespace(done=True, error=None,
+                            response=SimpleNamespace(generated_videos=[]))
+    with pytest.raises(RuntimeError, match="no video"):
+        video.poll_veo_operation(object(), empty, poll_seconds=0, timeout_seconds=60)
+
+
 def test_veo_preflight(monkeypatch):
     pytest.importorskip("google.genai")  # veo extra — skip on a bare clone
     monkeypatch.setattr(video, "pick_h264_encoder", lambda configured="": "libx264")

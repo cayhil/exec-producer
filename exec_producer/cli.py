@@ -2,7 +2,6 @@
 
 import argparse
 import json
-import os
 import random
 import sys
 from pathlib import Path
@@ -11,6 +10,7 @@ from .config import (AUDIT, CAST, DIRECTOR_MODEL, EPISODES, PROVIDER_ENV_KEYS,
                      SCENES, SHOW_NAME)
 from .engine import RunOptions, check_api_keys, run_episode, run_scene
 from .errors import ConfigError, ThreadResumeError
+from .llm import api_key_set
 from .telemetry import setup_logging, start_run
 
 
@@ -32,7 +32,7 @@ def director_key_or_die():
     after N degraded random-pick 'directing' calls."""
     provider = _director_provider()
     env_key = PROVIDER_ENV_KEYS.get(provider, "")
-    if not env_key or not os.environ.get(env_key):
+    if not env_key or not api_key_set(env_key):
         need = env_key or f"a provider_env_keys entry for '{provider}'"
         print(f"❌ Director model {DIRECTOR_MODEL} needs {need} set in .env")
         sys.exit(1)
@@ -164,7 +164,7 @@ def planner_preflight_or_die():
         sys.exit(1)
 
 
-def cast_keys_or_die(available, solo=False):
+def cast_keys_or_die(available, missing=(), solo=False):
     """Key gate. An ensemble run needs two cast keys; a solo run needs one
     (plus the director key, checked separately). Solo = --solo, or a show
     whose cast.json has exactly one character — nothing else is possible
@@ -172,7 +172,11 @@ def cast_keys_or_die(available, solo=False):
     needed = 1 if (solo or len(CAST) == 1) else 2
     if len(available) < needed:
         print("❌ Need the cast member's API key." if needed == 1
-              else "❌ Need at least 2 API keys.")
+              else f"❌ Need at least 2 API keys ({len(available)} cast available).")
+        for cid, provider in missing:
+            env_key = PROVIDER_ENV_KEYS.get(provider)
+            print(f"     - {cid} needs {env_key or f'a provider_env_keys entry for {provider!r}'}")
+        print("   Copy .env.example to .env and fill in what you have.")
         sys.exit(1)
 
 
@@ -278,6 +282,12 @@ def main():
             break
 
     args = parser.parse_args(argv)
+    if args.lines < 1:
+        # The classic loop would save an empty script; the planner graph
+        # would still direct-and-bill one line (plan → direct → speak runs
+        # before the first turn-count check). Reject instead of doing either.
+        print("❌ --lines must be at least 1")
+        sys.exit(1)
     if args.thread and not args.planner:
         print("❌ --thread resumes a --planner run — add --planner")
         sys.exit(1)
@@ -399,8 +409,8 @@ def main():
         cast_ids = resolve_cast(args.cast)
         if args.solo:
             solo_cast_or_die(cast_ids)
-        available, _ = check_api_keys(cast_ids)
-        cast_keys_or_die(available, solo=args.solo)
+        available, missing = check_api_keys(cast_ids)
+        cast_keys_or_die(available, missing, solo=args.solo)
         director_key_or_die()
         if args.audio or args.video:
             media_preflight_or_die(available, audio=args.audio, video=args.video,
@@ -428,8 +438,8 @@ def main():
         cast_ids = resolve_cast(args.cast)
         if args.solo:
             solo_cast_or_die(cast_ids)
-        available, _ = check_api_keys(cast_ids)
-        cast_keys_or_die(available, solo=args.solo)
+        available, missing = check_api_keys(cast_ids)
+        cast_keys_or_die(available, missing, solo=args.solo)
         director_key_or_die()
         if args.audio or args.video:
             media_preflight_or_die(available, audio=args.audio, video=args.video,

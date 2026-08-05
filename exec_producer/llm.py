@@ -1,6 +1,7 @@
 """API caller — LiteLLM is the single interface for all providers."""
 
 import json
+import os
 import re
 import time
 
@@ -13,6 +14,16 @@ from .config import DIRECTOR_MODEL, RELIABILITY
 litellm.suppress_debug_info = True
 
 log = telemetry.get_logger(__name__)
+
+
+def api_key_set(env_key):
+    """True when env_key holds a usable API key. Whitespace-only values and
+    values starting with '#' count as unset: a .env written in the inline-
+    comment style (`KEY=   # note`) reaches os.environ as the literal comment
+    text, and gating on truthiness alone would wave it through to a doomed,
+    confusing auth failure."""
+    value = os.environ.get(env_key or "", "").strip()
+    return bool(value) and not value.startswith("#")
 
 
 def parse_json_response(raw):
@@ -88,18 +99,26 @@ def call_model(model, messages, max_tokens=400, caller=None):
             num_retries_configured=RELIABILITY["num_retries"],
             error=type(e).__name__,
         )
-        log.warning(f"call failed after retries: {model}: {type(e).__name__}")
+        reason = str(e).strip().splitlines()[0][:200] if str(e).strip() else ""
+        log.warning(f"call failed after retries: {model}: {type(e).__name__}"
+                    + (f" — {reason}" if reason else ""))
         raise
     elapsed = time.time() - start_time
 
     # Detect fallback by positive match: providers echo canonical names that
     # can differ from the requested string (xAI drops "-beta"), so only count
-    # a fallback when the responder matches a configured fallback model.
+    # a fallback when the responder matches a configured fallback model. The
+    # most specific match wins: a fallback list carrying a truncated variant
+    # of the primary ("gpt-5" configured under "gpt-5.4") must not flag the
+    # primary's own echo as a fallback.
     fallback_used = False
     responded_model = None
     if fallbacks:
         responded = str(getattr(response, "model", "") or "")
-        if any(fb.split("/")[-1] in responded for fb in fallbacks):
+        matched = max((fb.split("/")[-1] for fb in fallbacks
+                       if fb.split("/")[-1] in responded), key=len, default=None)
+        requested = model.split("/")[-1]
+        if matched and (requested not in responded or len(matched) > len(requested)):
             fallback_used = True
             responded_model = responded
             telemetry.record_fallback(model, responded)

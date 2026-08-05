@@ -590,6 +590,9 @@ def episode_harness(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(engine, "EPISODES", EPISODE)
     monkeypatch.setattr(engine, "SCENES", TWO_SCENES)
+    # Show-agnostic: a loaded show that ships a content_rating cap (both
+    # committed starters do) must not cap this harness's "high" episode.
+    monkeypatch.setattr(engine, "MAX_INTENSITY", None)
 
     picks = {"n": 0}
     director_cast_seen = []
@@ -800,3 +803,20 @@ def test_run_episode_cap_wiring(monkeypatch, tmp_path, capsys):
     ep_jsons = [p for p in (tmp_path / "scripts").glob("test_show_episode_test_ep_*.json")
                 if not p.name.endswith("_eval.json")]
     assert json.loads(ep_jsons[0].read_text())["intensity"] == "low"
+
+
+# ── key gate ─────────────────────────────────────────────
+
+def test_check_api_keys_ignores_comment_valued_env(monkeypatch):
+    # A .env written in the inline-comment style ("KEY=   # note") reaches
+    # os.environ as the literal comment text — the gate must treat that as
+    # missing, not wave every provider through to doomed auth failures.
+    monkeypatch.setattr(engine, "CAST", {
+        "alpha": {"provider": "prov_a"}, "beta": {"provider": "prov_b"}})
+    monkeypatch.setattr(engine, "PROVIDER_ENV_KEYS",
+                        {"prov_a": "PROV_A_KEY", "prov_b": "PROV_B_KEY"})
+    monkeypatch.setenv("PROV_A_KEY", "real-key")
+    monkeypatch.setenv("PROV_B_KEY", "# starter show: someone")
+    available, missing = engine.check_api_keys(["alpha", "beta"])
+    assert available == ["alpha"]
+    assert missing == [("beta", "prov_b")]

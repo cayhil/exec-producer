@@ -274,11 +274,15 @@ def build_graph():
     return g
 
 
-def _run_graph(initial_state, thread_id):
+def _run_graph(initial_state, thread_id, expect_scene_ids=None):
     """Invoke with durable checkpointing. initial_state=None resumes the
     thread from its last checkpoint (the --thread flag) — after verifying
     the checkpoint actually exists (a typo'd id would otherwise start the
-    graph on empty state and crash mid-node)."""
+    graph on empty state and crash mid-node) and that its scene queue is the
+    invoked run's. The id-prefix guard alone can't guarantee that: scene ids
+    are valid inside each other ('hot_tub' prefixes 'hot_tub_2'), so a
+    mismatched resume would complete the wrong run at full cost and save it
+    under this run's identity."""
     from langgraph.checkpoint.sqlite import SqliteSaver  # lazy: planner extra
     os.makedirs("scripts", exist_ok=True)
     with SqliteSaver.from_conn_string(CHECKPOINT_DB) as saver:
@@ -290,6 +294,13 @@ def _run_graph(initial_state, thread_id):
             if not snapshot.values:
                 raise ThreadResumeError(
                     f"unknown planner thread '{thread_id}' — no checkpoint in {CHECKPOINT_DB}")
+            checkpointed = [c.get("scene_id")
+                            for c in snapshot.values.get("scene_queue", [])]
+            if expect_scene_ids is not None and checkpointed != list(expect_scene_ids):
+                raise ThreadResumeError(
+                    f"thread '{thread_id}' was checkpointed for scenes "
+                    f"{checkpointed}, not this run's {list(expect_scene_ids)} — "
+                    "resume it with the same --scene/--episode it was started with")
             if not snapshot.next:
                 print("  ℹ️  This thread already completed — re-saving its outputs "
                       "without re-running any dialogue")
@@ -337,7 +348,7 @@ def run_scene_planned(scene_id, cast_ids, opts=None, thread_id=None):
         "director_only": opts.director_only, "sessions": {},
         "completed_scenes": [],
     }
-    final = _run_graph(initial, thread_id)
+    final = _run_graph(initial, thread_id, expect_scene_ids=[scene_id])
     result = final["completed_scenes"][0]
     engine.save_scene_outputs(
         scene_id, result["scene"], result["conversation"], result["director_notes"],
@@ -366,7 +377,8 @@ def run_episode_planned(episode_id, cast_ids, opts=None, thread_id=None):
         "director_only": opts.director_only, "sessions": {},
         "completed_scenes": [],
     }
-    final = _run_graph(initial, thread_id)
+    final = _run_graph(initial, thread_id,
+                       expect_scene_ids=[sc["scene"] for sc in episode["scenes"]])
     all_conversations = final["completed_scenes"]
 
     print("\n" + "=" * 60)

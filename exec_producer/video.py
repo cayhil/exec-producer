@@ -24,6 +24,7 @@ from pathlib import Path
 from . import telemetry
 from .audio import concat_entry, spoken_text
 from .config import load_visuals, load_voices
+from .llm import api_key_set
 
 # Used when data/visuals.json is absent or has no entry for a character:
 # card colors are assigned deterministically from the scene's cast order.
@@ -327,7 +328,17 @@ def poll_veo_operation(client, op, poll_seconds, timeout_seconds):
             raise TimeoutError(f"Veo operation still running after {timeout_seconds}s")
         time.sleep(poll_seconds)
         op = client.operations.get(op)
-    return client.files.download(file=op.response.generated_videos[0].video)
+    # A done operation can still be a failure: op.error set, or a response
+    # with no videos (safety-filtered). Raise the API's own message instead
+    # of letting op.response.generated_videos[0] die on an attribute error —
+    # the beat loop's JSONL receipt records the exception name, and
+    # "RuntimeError: Veo operation failed: <reason>" beats "AttributeError".
+    if getattr(op, "error", None):
+        raise RuntimeError(f"Veo operation failed: {op.error}")
+    videos = getattr(op.response, "generated_videos", None) if op.response else None
+    if not videos:
+        raise RuntimeError("Veo operation returned no video (possibly safety-filtered)")
+    return client.files.download(file=videos[0].video)
 
 
 def _generate_veo_clip(client, model, prompt, poll_seconds, timeout_seconds):
@@ -393,7 +404,7 @@ def render_veo_video(beats, out_prefix, client=None, poll_seconds=15, timeout_se
 def veo_preflight():
     """--render-mode veo checks, before any LLM or Veo spend."""
     problems = []
-    if not os.environ.get("GEMINI_API_KEY"):
+    if not api_key_set("GEMINI_API_KEY"):
         problems.append("GEMINI_API_KEY is not set in .env (Veo renders via the Gemini API)")
     try:
         sdk_present = importlib.util.find_spec("google.genai") is not None

@@ -22,6 +22,7 @@ from pathlib import Path
 
 from . import telemetry
 from .config import load_voices
+from .llm import api_key_set
 
 _ACTION_MARKUP = re.compile(r"\[[^\]]*\]|\*[^*]*\*")
 
@@ -127,14 +128,17 @@ def concat_entry(path):
     return f"file '{escaped}'\n"
 
 
-def concat_list(line_files, gap_path):
+def concat_list(line_files, gap_path=None):
     """Concat-demuxer list: a gap between consecutive lines, none after the
-    last. Absolute paths, so the list works regardless of ffmpeg's cwd."""
+    last (no gap entries at all when gap_path is None). Absolute paths, so
+    the list works regardless of ffmpeg's cwd."""
     entries = []
     for p in line_files:
         entries.append(str(Path(p).resolve()))
-        entries.append(str(Path(gap_path).resolve()))
-    entries = entries[:-1]
+        if gap_path is not None:
+            entries.append(str(Path(gap_path).resolve()))
+    if gap_path is not None:
+        entries = entries[:-1]
     return "".join(concat_entry(e) for e in entries)
 
 
@@ -154,11 +158,18 @@ def _run_ffmpeg(cmd):
 def stitch_lines(line_files, out_path, gap_seconds=0.4, workdir=None):
     """Concatenate per-line mp3s with a silence gap between lines. The gap is
     generated to match the first line's sample rate/channels — the concat
-    demuxer needs uniform stream parameters across entries."""
+    demuxer needs uniform stream parameters across entries.
+
+    gap_seconds <= 0 means no gap file at all: ffmpeg renders a zero-length
+    silence as a frameless mp3, and the concat demuxer hits it, errors on
+    stderr, yet still EXITS 0 — silently dropping every line after the first
+    gap entry. The gap must be absent from the list, not present-but-empty."""
     workdir = Path(workdir) if workdir else Path(line_files[0]).parent
-    rate, channels = probe_stream(line_files[0])
-    gap_path = workdir / "_gap.mp3"
-    _run_ffmpeg(silence_cmd(gap_path, gap_seconds, rate, channels))
+    gap_path = None
+    if gap_seconds > 0 and len(line_files) > 1:
+        rate, channels = probe_stream(line_files[0])
+        gap_path = workdir / "_gap.mp3"
+        _run_ffmpeg(silence_cmd(gap_path, gap_seconds, rate, channels))
     list_path = workdir / "_concat.txt"
     list_path.write_text(concat_list(line_files, gap_path))
     _run_ffmpeg(concat_cmd(list_path, out_path))
@@ -225,7 +236,7 @@ def preflight(cast_ids):
     Returns a list of problems (empty = good to go), collecting all of them
     instead of stopping at the first."""
     problems = []
-    if not os.environ.get("ELEVENLABS_API_KEY"):
+    if not api_key_set("ELEVENLABS_API_KEY"):
         problems.append("ELEVENLABS_API_KEY is not set in .env")
     if importlib.util.find_spec("elevenlabs") is None:
         problems.append("elevenlabs SDK not installed — run: uv sync --extra audio")

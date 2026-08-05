@@ -32,7 +32,8 @@ from .config import (
     CHARACTER_TEMPLATE,
     WORLD,
 )
-from .llm import call_director, call_model, call_model_simple, parse_json_response
+from .llm import (api_key_set, call_director, call_model, call_model_simple,
+                  parse_json_response)
 from . import telemetry
 from .evaluate import evaluate_scene, summarize_scorecard
 
@@ -284,8 +285,10 @@ def get_scene_cast(scene, all_cast_ids, plot=""):
         except (json.JSONDecodeError, AttributeError):
             time.sleep(0.5)
 
-    # Fallback: use everyone
-    return all_cast_ids
+    # Fallback: use everyone — a copy, because episode runs extend the
+    # returned list in place (forced-cast merge) and must not mutate the
+    # caller's cast list through an alias.
+    return list(all_cast_ids)
 
 
 def get_director_choice(scene, conversation, cast_ids, last_speaker, intensity="high", plot="",
@@ -595,7 +598,7 @@ def check_api_keys(cast_ids):
     for cid in cast_ids:
         provider = CAST[cid]["provider"]
         env_key = PROVIDER_ENV_KEYS.get(provider, "")
-        if env_key and os.environ.get(env_key):
+        if env_key and api_key_set(env_key):
             available.append(cid)
         else:
             missing.append((cid, provider))

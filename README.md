@@ -42,7 +42,7 @@ Feels like useful information."               for a week and then you'd never le
 - **Media pipeline with explicit tradeoffs.** Persistent ElevenLabs voices + Pillow-composed video
   by default; Veo-native generation as a gated, priced-in opt-in. Text is drawn by Pillow
   specifically so minimal ffmpeg builds (no drawtext/libass) still work.
-- **~220 unit tests, zero network.** All LLM/TTS/ffmpeg calls mocked; the suite runs in ~3 seconds.
+- **~230 unit tests, zero network.** All LLM/TTS/ffmpeg calls mocked; the suite runs in ~3 seconds.
 
 ## 60-second quickstart
 
@@ -52,10 +52,13 @@ uv sync                              # engine only; media/planner extras are opt
 cp .env.example .env                 # 2+ provider keys, incl. the director's (starter: OpenAI)
 uv run exec-producer --list          # scenes from the starter show (examples/sunset_terrace)
 uv run exec-producer --scene rooftop_welcome --lines 6
+uv run exec-producer --episode premiere   # full episode — sessions persist across scenes
 ```
 
 That runs a real scene: the director casts it, four archetypes on four different providers
-improvise it, and the script + raw JSON + telemetry land in `scripts/`.
+improvise it, and the script + raw JSON + telemetry land in `scripts/`. `--list-episodes`
+shows the episodes a show ships; an episode run keeps every character's memory alive from
+scene to scene, and the director casts each scene after the opener.
 
 ## Architecture
 
@@ -80,6 +83,7 @@ flowchart TD
     OUT -->|--audio| A[ElevenLabs TTS<br/>persistent voice per character]
     A -->|--video| V[Pillow cards + ffmpeg<br/>9:16 MP4 + SRT]
     OUT -->|--video --render-mode veo| VEO[Veo clips per beat]
+    OUT -->|--video --render-mode vlog| VL[Generated clips + voice swap<br/>solo-host vlog · API or BYO]
     LL[LiteLLM · retries · timeouts · fallbacks] --- D
     LL --- C1
     TEL[(JSONL run log<br/>per-call telemetry)] --- LL
@@ -93,6 +97,7 @@ generates the line → repeat. Episodes keep sessions alive across scenes; chara
 
 | Flag | Stage |
 |---|---|
+| `--episode <id>` | Full episode run — persistent sessions across scenes, per-scene casting, plot beats (`--list-episodes` to enumerate) |
 | `--eval` | Judge-model scorecard (format, voice, pacing) saved next to the script |
 | `--audio` | Per-line TTS in each character's persistent voice, stitched per scene (`uv sync --extra audio`) |
 | `--video` | 9:16 MP4: character cards + dialogue text + TTS audio; exact-timing SRT for editing (`--extra video`) |
@@ -279,7 +284,7 @@ The image bundles ffmpeg + fonts (full media pipeline) and ships only the starte
 ## Development
 
 ```bash
-uv run pytest        # ~220 tests, all LLM/TTS/ffmpeg calls mocked, no network
+uv run pytest        # ~230 tests, all LLM/TTS/ffmpeg calls mocked, no network
 uv sync --all-extras # audio + video + veo + vlog + planner extras
 ```
 

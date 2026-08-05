@@ -231,6 +231,29 @@ def test_resume_rejects_wrong_run_type(monkeypatch, tmp_path):
                                   thread_id="episode_pilot_20260101_1")
 
 
+def test_resume_rejects_prefix_overlapping_scene(monkeypatch, tmp_path):
+    pytest.importorskip("langgraph")  # planner extra — skip on a bare clone
+    # "test" is a valid prefix of "test_2", so the thread-id prefix guard
+    # alone would accept resuming a test_2 checkpoint under --scene test and
+    # save the wrong scene under this run's identity. The checkpoint's own
+    # scene queue is the authority.
+    calls = planner_harness(monkeypatch, tmp_path)
+    monkeypatch.setattr(engine, "SCENES", {
+        "test": SCENE, "test_2": {"name": "Two", "prompt": "p", "mood": "m"}})
+    monkeypatch.setattr(planner, "_new_thread_id",
+                        lambda prefix: f"{prefix}_20260101_120000_1")
+    planner.run_scene_planned("test_2", ["alpha", "beta"],
+                              engine.RunOptions(num_lines=1, intensity="low"))
+    lines_before = calls["lines"]
+
+    from exec_producer.errors import ThreadResumeError
+    with pytest.raises(ThreadResumeError, match="checkpointed for scenes"):
+        planner.run_scene_planned("test", ["alpha", "beta"],
+                                  engine.RunOptions(num_lines=1, intensity="low"),
+                                  thread_id="scene_test_2_20260101_120000_1")
+    assert calls["lines"] == lines_before  # rejected before any dialogue ran
+
+
 def test_resume_rejects_unknown_thread(monkeypatch, tmp_path):
     pytest.importorskip("langgraph")  # planner extra — skip on a bare clone
     planner_harness(monkeypatch, tmp_path)

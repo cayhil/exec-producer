@@ -85,6 +85,29 @@ def test_provider_resolved_when_hidden_params_missing(monkeypatch, reliability):
     assert telemetry.get_run_log().records[-1]["provider"] == "anthropic"
 
 
+def test_truncated_primary_in_fallback_list_not_flagged(monkeypatch, reliability):
+    # Regression: with "gpt-5" configured as the fallback for "gpt-5.4", the
+    # primary's own echo contains the fallback name as a substring — that
+    # must not be counted (and warned about) as an engaged fallback.
+    reliability["fallbacks"]["gpt-5.4"] = ["gpt-5"]
+    resp = make_response(model="gpt-5.4")
+    capture_completion(monkeypatch, response=resp)
+    llm.call_model("gpt-5.4", MSGS)
+    assert telemetry.get_run_log().fallbacks == {}
+    assert telemetry.get_run_log().records[-1]["fallback_used"] is False
+
+
+def test_fallback_name_containing_primary_still_flagged(monkeypatch, reliability):
+    # The inverse case: the engaged fallback's name contains the primary's
+    # name ("gpt-5-mini" under "gpt-5") — the more specific match wins.
+    reliability["fallbacks"]["prov/gpt-5"] = ["prov/gpt-5-mini"]
+    resp = make_response(model="gpt-5-mini")
+    capture_completion(monkeypatch, response=resp)
+    llm.call_model("prov/gpt-5", MSGS)
+    assert telemetry.get_run_log().fallbacks["prov/gpt-5"] == 1
+    assert telemetry.get_run_log().records[-1]["fallback_used"] is True
+
+
 def test_canonical_name_drift_is_not_a_fallback(monkeypatch, reliability):
     # Regression: xAI echoes "grok-4.20-0309-..." for a requested
     # "grok-4.20-beta-0309-..." — name drift must not count as a fallback.
@@ -132,3 +155,17 @@ def test_call_model_simple_builds_messages(monkeypatch, reliability):
         {"role": "user", "content": "USER"},
     ]
     assert telemetry.get_run_log().records[-1]["caller"] == "production"
+
+
+def test_api_key_set_rejects_unusable_values(monkeypatch):
+    # Whitespace and '#'-comment values count as unset (the inline-comment
+    # .env failure mode); real keys survive surrounding whitespace.
+    monkeypatch.setenv("FAKE_PROVIDER_KEY", "# starter show: director")
+    assert llm.api_key_set("FAKE_PROVIDER_KEY") is False
+    monkeypatch.setenv("FAKE_PROVIDER_KEY", "   ")
+    assert llm.api_key_set("FAKE_PROVIDER_KEY") is False
+    monkeypatch.delenv("FAKE_PROVIDER_KEY")
+    assert llm.api_key_set("FAKE_PROVIDER_KEY") is False
+    assert llm.api_key_set("") is False
+    monkeypatch.setenv("FAKE_PROVIDER_KEY", " sk-real ")
+    assert llm.api_key_set("FAKE_PROVIDER_KEY") is True

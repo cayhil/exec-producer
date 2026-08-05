@@ -22,6 +22,11 @@ def setup_logging(debug=False):
         logger.addHandler(handler)
     logger.setLevel(logging.DEBUG if debug else logging.INFO)
     logger.propagate = False
+    # LiteLLM's own logger prints a full traceback at ERROR for every failed
+    # attempt (bad key, quota, timeout). The engine already prints a one-line
+    # outcome per call with the reason and records it in the run log — keep
+    # the raw spew behind --debug.
+    logging.getLogger("LiteLLM").setLevel(logging.DEBUG if debug else logging.CRITICAL)
 
 
 def get_logger(name=_LOGGER_NAME):

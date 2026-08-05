@@ -142,6 +142,70 @@ _require_safe_ids("cast.json", CAST.keys())
 _require_safe_ids("scenes.json", SCENES.keys())
 _require_safe_ids("episodes.json", EPISODES.keys())
 
+
+def validate_show_data(cast, scenes, episodes):
+    """Cross-file shape checks for fields the engine reads mid-run. Pure,
+    like validate_data_dir, so a broken show can be diagnosed directly.
+    The stakes: an episode entry referencing a missing scene (or lacking
+    'lines') would otherwise KeyError at that scene's start — after every
+    earlier scene was already billed, with nothing saved until episode wrap."""
+    problems = []
+    for cid, c in cast.items():
+        if not isinstance(c, dict):
+            problems.append(f"cast.json '{cid}' must be an object")
+            continue
+        if cid != cid.lower():
+            problems.append(
+                f"cast.json id '{cid}' must be lowercase — director casting "
+                "replies and --cast values are normalized to lowercase, so an "
+                "uppercase id can never be matched")
+        missing = [k for k in ("name", "provider", "model", "emoji", "tagline",
+                               "gender", "personality", "triggers") if k not in c]
+        if missing:
+            problems.append(f"cast.json '{cid}' is missing: {', '.join(missing)}")
+        elif not isinstance(c["triggers"], list):
+            problems.append(f"cast.json '{cid}' triggers must be a list")
+    for sid, s in scenes.items():
+        if not isinstance(s, dict):
+            problems.append(f"scenes.json '{sid}' must be an object")
+            continue
+        missing = [k for k in ("name", "prompt", "mood") if k not in s]
+        if missing:
+            problems.append(f"scenes.json '{sid}' is missing: {', '.join(missing)}")
+    for eid, ep in episodes.items():
+        if not isinstance(ep, dict):
+            problems.append(f"episodes.json '{eid}' must be an object")
+            continue
+        missing = [k for k in ("name", "description") if k not in ep]
+        if missing:
+            problems.append(f"episodes.json '{eid}' is missing: {', '.join(missing)}")
+        entries = ep.get("scenes")
+        if not isinstance(entries, list) or not entries:
+            problems.append(f"episodes.json '{eid}' needs a non-empty 'scenes' list")
+            continue
+        for n, sc in enumerate(entries, 1):
+            if not isinstance(sc, dict):
+                problems.append(f"episodes.json '{eid}' scene {n} must be an object")
+                continue
+            if "scene" not in sc:
+                problems.append(f"episodes.json '{eid}' scene {n} is missing 'scene'")
+            elif sc["scene"] not in scenes:
+                problems.append(f"episodes.json '{eid}' scene {n} references "
+                                f"unknown scene '{sc['scene']}'")
+            if not isinstance(sc.get("lines"), int) or sc["lines"] < 1:
+                problems.append(f"episodes.json '{eid}' scene {n} needs an "
+                                "integer 'lines' >= 1")
+    return problems
+
+
+_data_problems = validate_show_data(CAST, SCENES, EPISODES)
+if _data_problems:
+    raise ConfigError(
+        f"show directory {DATA_DIR} doesn't satisfy the data contract:\n"
+        + "\n".join(f"     - {p}" for p in _data_problems)
+        + "\n   See CREATING_A_SHOW.md for the full contract."
+    )
+
 # Prompt templates
 DIRECTOR_SYSTEM = _load_text("prompts/director.txt").replace("__WORLD__", WORLD)
 PRODUCTION_SYSTEM = _load_text("prompts/production.txt")

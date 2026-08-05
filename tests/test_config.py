@@ -1,7 +1,9 @@
 """Data-contract and --data-dir tests. The contract failure path runs in a
 subprocess (config loads at import time); everything else is direct."""
 
+import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -76,6 +78,61 @@ def test_committed_starter_shows_satisfy_contract():
     root = Path(config.__file__).resolve().parent.parent
     for show in ("sunset_terrace", "night_signal"):
         assert config.validate_data_dir(root / "examples" / show) == [], show
+
+
+def test_validate_show_data_accepts_the_loaded_show():
+    assert config.validate_show_data(config.CAST, config.SCENES, config.EPISODES) == []
+
+
+def test_validate_show_data_catches_broken_episode_refs():
+    # The stakes: a bad ref in a later scene would otherwise KeyError
+    # mid-episode — after the earlier scenes were fully billed, and before
+    # anything is saved (episodes save only at wrap).
+    cast = {"alpha": {"name": "A", "provider": "openai", "model": "m",
+                      "emoji": "e", "tagline": "t", "gender": "guy",
+                      "personality": "p", "triggers": ["x"]}}
+    scenes = {"s1": {"name": "One", "prompt": "p", "mood": "m"}}
+    episodes = {"ep": {"name": "Ep", "description": "d",
+                       "scenes": [{"scene": "s1", "lines": 2},
+                                  {"scene": "typo", "lines": 2},
+                                  {"scene": "s1"}]}}
+    problems = config.validate_show_data(cast, scenes, episodes)
+    assert any("unknown scene 'typo'" in p for p in problems)
+    assert any("scene 3" in p and "'lines'" in p for p in problems)
+    assert len(problems) == 2  # every problem listed at once
+
+
+def test_validate_show_data_catches_missing_fields():
+    cast = {"Alpha": {"name": "A"}}   # uppercase id + missing contract fields
+    scenes = {"s1": {"name": "One"}}  # missing prompt/mood
+    episodes = {"ep": {"name": "Ep", "description": "d", "scenes": []}}
+    problems = config.validate_show_data(cast, scenes, episodes)
+    assert any("lowercase" in p for p in problems)
+    assert any("cast.json 'Alpha' is missing" in p and "provider" in p
+               for p in problems)
+    assert any("scenes.json 's1' is missing" in p and "mood" in p
+               for p in problems)
+    assert any("non-empty 'scenes'" in p for p in problems)
+
+
+def test_cli_reports_broken_episode_ref_legibly(tmp_path):
+    """A scene typo in episodes.json must die at startup with a clean
+    ConfigError — not KeyError deep into a paid episode run."""
+    root = Path(config.__file__).resolve().parent.parent
+    show = tmp_path / "show"
+    shutil.copytree(root / "examples" / "sunset_terrace", show)
+    episodes = json.loads((show / "episodes.json").read_text())
+    next(iter(episodes.values()))["scenes"][1]["scene"] = "no_such_scene"
+    (show / "episodes.json").write_text(json.dumps(episodes))
+    proc = subprocess.run(
+        [sys.executable, "-m", "exec_producer", "--data-dir", str(show), "--list"],
+        capture_output=True, text=True, timeout=30,
+        cwd=root, env={**os.environ, "EXEC_PRODUCER_DATA_DIR": ""},
+    )
+    assert proc.returncode == 1
+    out = proc.stdout + proc.stderr
+    assert "no_such_scene" in out
+    assert "Traceback" not in out
 
 
 def test_show_identity_defaults():

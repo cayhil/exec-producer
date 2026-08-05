@@ -102,6 +102,11 @@ physical activities the drama occurs during, not monologue topics. Sessions pers
 episode's scenes: characters remember everything from earlier scenes, and the director casts each
 scene after the opener.
 
+```bash
+uv run exec-producer --data-dir my_show --list-episodes
+uv run exec-producer --data-dir my_show --episode <episode_id>
+```
+
 ## Prompt files
 
 `character_template.txt` assembles each character's system prompt from placeholders
@@ -120,7 +125,19 @@ without it, cards fall back to a built-in palette.
 ## Vlog mode (`--video --render-mode vlog`)
 
 The vlog mode (solo-host generated footage with a persistent voice — see README for the full
-tradeoff) reads two extra pieces of show data:
+tradeoff) renders a written scene .json (`--from-script` — the engine's saved-scene shape, see
+the showrunner skill) and reads two extra pieces of show data, described below:
+
+```bash
+# ALWAYS preview first: clip plan + ESTIMATED cost + per-beat prompt pack — bills nothing
+uv run exec-producer --data-dir my_show --from-script scripts/<scene>.json --video --render-mode vlog --dry-run
+
+# Render clips you generated yourself (Veo web UI, any tool) — no video-API spend
+uv run exec-producer --data-dir my_show --from-script scripts/<scene>.json --video --render-mode vlog --clips-dir <folder>
+
+# API route: the engine generates every clip via Veo — bills per second of footage
+uv run exec-producer --data-dir my_show --from-script scripts/<scene>.json --video --render-mode vlog
+```
 
 ### Host reference images
 

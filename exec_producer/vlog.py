@@ -33,7 +33,6 @@ subscription quota, or any other tool) — the downstream pipeline
 
 import importlib.util
 import json
-import os
 import subprocess
 import time
 from pathlib import Path
@@ -41,6 +40,7 @@ from pathlib import Path
 from . import telemetry
 from .audio import get_backend, spoken_text
 from .config import load_visuals, load_voices
+from .llm import api_key_set
 from .video import (H264_ENCODERS, VEO_MODEL, audio_duration, build_srt,
                     concat_entry, pick_h264_encoder, poll_veo_operation,
                     veo_client)
@@ -137,7 +137,9 @@ def build_clip_plan(conversation, scene, cfg):
 
 
 def _template_shot(entry, scene, delivery):
-    setting = scene.get("prompt", "")
+    # Trailing period stripped: the templates add their own, and a prompt
+    # ending in "." would otherwise render "hill.. Natural motion".
+    setting = scene.get("prompt", "").strip().rstrip(".")
     if delivery == "on_camera":
         return (f"Selfie-vlog POV, handheld: {entry['name']} ({entry.get('tagline', '')}) "
                 f"holds the camera at arm's length and talks directly into it. "
@@ -153,9 +155,10 @@ def _clip_prompt(shot, words, delivery, host_in_frame, cfg):
     16:9 generation croppable when the show's format is 9:16."""
     parts = [shot]
     if delivery == "on_camera":
-        # scripts carry their own quote marks — strip them so the template's
-        # quoting doesn't double up
-        parts.append(f'They say, speaking naturally to the camera: "{words.strip(chr(34))}"')
+        # scripts carry their own quote marks, straight or curly — strip them
+        # so the template's quoting doesn't double up
+        parts.append('They say, speaking naturally to the camera: '
+                     f'"{words.strip(chr(34) + "“”")}"')
     else:
         parts.append("No one speaks. Ambient sound only — no dialogue, no narration.")
     if cfg["aspect"] == "9:16" and host_in_frame:
@@ -176,8 +179,11 @@ def describe_plan(plan, cfg, clips_dir=None):
     split, estimated cost."""
     on_cam = sum(1 for b in plan if b["delivery"] == "on_camera")
     seconds, cost = estimate_cost(plan, cfg)
+    # Total from per-beat seconds, no per-clip arithmetic in the display:
+    # reference-image beats are forced to 8s regardless of clip_seconds, so
+    # "N clips × ~Xs" would not add up whenever the two durations mix.
     lines = [
-        f"Clip plan: {len(plan)} clips × ~{cfg['clip_seconds']}s = ~{seconds}s of footage "
+        f"Clip plan: {len(plan)} clips, ~{seconds}s of footage "
         f"({on_cam} on-camera, {len(plan) - on_cam} voiceover), {cfg['aspect']}",
     ]
     if clips_dir:
@@ -228,6 +234,10 @@ def validate_clips_dir(clips_dir, plan):
         return [f"{clips_dir} is not a directory"]
     found = {}
     for p in sorted(d.iterdir()):
+        if p.name.startswith("."):
+            # OS metadata (.DS_Store, ._* AppleDouble) appears in any folder
+            # Finder has touched — never a clip, never a validation failure.
+            continue
         if p.is_symlink() or not p.is_file():
             # Clip folders come from anywhere ("any other tool") — a symlink
             # would splice a file from OUTSIDE the folder into the video.
@@ -594,7 +604,7 @@ def preflight(cast_ids, api_route=True):
         problems.append(f"visuals.json vlog config: {e}")
         return problems
     if api_route:
-        if not os.environ.get("GEMINI_API_KEY"):
+        if not api_key_set("GEMINI_API_KEY"):
             problems.append("GEMINI_API_KEY is not set in .env (vlog clips generate via the Gemini API)")
         try:
             # find_spec on a dotted name raises when the parent namespace

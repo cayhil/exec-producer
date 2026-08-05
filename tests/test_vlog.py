@@ -107,6 +107,27 @@ def test_estimate_cost():
     assert "ESTIMATED cost ~$8.00" in vlog.describe_plan(plan, cfg16())
 
 
+def test_describe_plan_totals_mixed_forced_durations():
+    # A reference-image beat bills 8s regardless of clip_seconds — the plan
+    # header must print the true total, not clips × clip_seconds arithmetic.
+    cfg = vlog.vlog_config({"vlog": {"clip_seconds": 5},
+                            "characters": {"host": {
+                                "reference_images": ["/abs/host.png"]}}})
+    plan = vlog.build_clip_plan(CONV, SCENE, cfg)
+    assert [b["seconds"] for b in plan] == [8, 5]  # ref-forced vs configured
+    desc = vlog.describe_plan(plan, cfg)
+    assert "2 clips" in desc and "~13s" in desc and "×" not in desc
+
+
+def test_clip_prompt_strips_curly_quotes():
+    # LLM-written scripts often carry smart quotes — the template's own
+    # quoting must not double up around them.
+    conv = [{**HOST, "text": "“Welcome back.”", "delivery": "on_camera"}]
+    plan = vlog.build_clip_plan(conv, SCENE, cfg16())
+    assert '"Welcome back."' in plan[0]["prompt"]
+    assert "“" not in plan[0]["prompt"] and "”" not in plan[0]["prompt"]
+
+
 def test_prompt_pack(tmp_path):
     plan = vlog.build_clip_plan(CONV, SCENE, cfg16())
     vlog.write_prompt_pack(plan, tmp_path / "pack.txt", cfg16())
@@ -142,6 +163,14 @@ def test_clips_dir_lists_every_problem(tmp_path):
     assert "unexpected file: notes.txt" in problems
     assert "beat_001.mp4 is empty" in problems
     assert "not a directory" in vlog.validate_clips_dir(tmp_path / "nope", plan)[0]
+
+
+def test_clips_dir_ignores_os_metadata(tmp_path):
+    # .DS_Store / ._AppleDouble files appear in any Finder-touched folder —
+    # they must not fail the whole render as "unexpected file".
+    plan = vlog.build_clip_plan(CONV, SCENE, cfg16())
+    d = make_clips(tmp_path, junk=(".DS_Store", "._beat_001.mp4"))
+    assert vlog.validate_clips_dir(d, plan) == []
 
 
 def test_clips_dir_rejects_symlinks(tmp_path):

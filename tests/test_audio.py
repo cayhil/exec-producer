@@ -154,6 +154,41 @@ def test_stitch_lines_generates_matched_gap_then_concats(tmp_path, monkeypatch):
     assert len(listing) == 3 and "_gap.mp3" in listing[1]
 
 
+def test_stitch_lines_zero_gap_concats_directly(tmp_path, monkeypatch):
+    # gap_seconds=0 must mean NO gap entry at all: ffmpeg renders 0s of
+    # silence as a frameless mp3 the concat demuxer errors on yet EXITS 0 —
+    # silently dropping every line after the first gap (verified live).
+    calls = []
+    monkeypatch.setattr(audio, "probe_stream",
+                        lambda p: pytest.fail("gapless stitch must not probe"))
+    monkeypatch.setattr(audio, "_run_ffmpeg", lambda cmd: calls.append(cmd))
+    f1, f2 = tmp_path / "a.mp3", tmp_path / "b.mp3"
+    f1.write_bytes(b"x")
+    f2.write_bytes(b"y")
+
+    audio.stitch_lines([f1, f2], str(tmp_path / "out.mp3"),
+                       gap_seconds=0, workdir=tmp_path)
+
+    assert len(calls) == 1  # concat only — no silence generation
+    assert calls[0][calls[0].index("-f") + 1] == "concat"
+    listing = (tmp_path / "_concat.txt").read_text().strip().split("\n")
+    assert len(listing) == 2 and not any("_gap.mp3" in line for line in listing)
+    assert listing[0].endswith("a.mp3'") and listing[1].endswith("b.mp3'")
+
+
+def test_stitch_lines_single_file_skips_gap(tmp_path, monkeypatch):
+    # One line: nothing to put a gap between — probe_stream/silence never run
+    # (they'd shell out and fail on this fake file if they did).
+    calls = []
+    monkeypatch.setattr(audio, "_run_ffmpeg", lambda cmd: calls.append(cmd))
+    f1 = tmp_path / "a.mp3"
+    f1.write_bytes(b"x")
+    audio.stitch_lines([f1], str(tmp_path / "out.mp3"),
+                       gap_seconds=0.4, workdir=tmp_path)
+    assert len(calls) == 1
+    assert calls[0][calls[0].index("-f") + 1] == "concat"
+
+
 # ── preflight ────────────────────────────────────────────
 
 @pytest.fixture

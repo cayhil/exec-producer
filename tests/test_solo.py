@@ -193,6 +193,15 @@ def test_cli_one_character_show_runs_with_one_key(monkeypatch, tmp_path):
     assert captured["cast"] == ["alpha"]
 
 
+def test_cli_rejects_nonpositive_lines(monkeypatch, capsys):
+    # --lines 0 would save an empty script on the classic path and still
+    # direct-and-bill one line on the planner path — reject it up front.
+    _patch_cli(monkeypatch, FAKE_CAST, list(FAKE_CAST))
+    with pytest.raises(SystemExit):
+        _cli_main(monkeypatch, ["--scene", "test", "--lines", "0"])
+    assert "--lines" in capsys.readouterr().out
+
+
 def test_cli_multi_show_still_needs_two_keys(monkeypatch, capsys):
     _patch_cli(monkeypatch, FAKE_CAST, ["alpha"])
     with pytest.raises(SystemExit):
