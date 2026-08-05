@@ -1,14 +1,16 @@
 """CLI entry point and interactive mode."""
 
 import argparse
+import json
 import os
 import random
 import sys
+from pathlib import Path
 
 from .config import (AUDIT, CAST, DIRECTOR_MODEL, EPISODES, PROVIDER_ENV_KEYS,
                      SCENES, SHOW_NAME)
 from .engine import RunOptions, check_api_keys, run_episode, run_scene
-from .errors import ThreadResumeError
+from .errors import ConfigError, ThreadResumeError
 from .telemetry import setup_logging, start_run
 
 
@@ -62,8 +64,10 @@ def interactive_mode():
     if missing:
         print(f"\n  ⚠️  Missing keys: {', '.join(f'{n} ({p})' for n, p in missing)}")
 
-    if len(available) < 2:
-        print("\n❌ Need at least 2 APIs. Set keys and try again.")
+    # One-character shows are solo: one cast key + the director key suffice.
+    if len(available) < (1 if len(CAST) == 1 else 2):
+        print("\n❌ Need at least 2 APIs. Set keys and try again." if len(CAST) > 1
+              else "\n❌ Need the cast member's API key. Set it and try again.")
         sys.exit(1)
 
     # Cast selection
@@ -124,7 +128,8 @@ def interactive_mode():
                   RunOptions(num_lines=num_lines, produce=produce, intensity=intensity))
 
 
-def media_preflight_or_die(cast_ids, audio=False, video=False, render_mode="tts"):
+def media_preflight_or_die(cast_ids, audio=False, video=False, render_mode="tts",
+                           clips_dir=""):
     """--audio/--video validation before any LLM money is spent: API keys,
     ffmpeg capabilities, SDK installs, and voice coverage for this run's
     cast. Collects every problem instead of stopping at the first."""
@@ -132,12 +137,18 @@ def media_preflight_or_die(cast_ids, audio=False, video=False, render_mode="tts"
     if audio:
         from .audio import preflight as audio_preflight  # lazy imports:
         problems += audio_preflight(cast_ids)            # keep non-media startup light
-    if video and render_mode == "veo":
+    if video and render_mode == "vlog":
+        from .vlog import preflight as vlog_preflight
+        # BYO clips = no Veo spend, so the API-route checks don't apply
+        problems += vlog_preflight(cast_ids, api_route=not clips_dir)
+    elif video and render_mode == "veo":
         from .video import veo_preflight
         problems += veo_preflight()
     elif video:
         from .video import preflight as video_preflight
         problems += video_preflight()
+    # audio + vlog both check the voice pipeline — report each problem once
+    problems = list(dict.fromkeys(problems))
     if problems:
         for p in problems:
             print(f"❌ {p}")
@@ -150,6 +161,25 @@ def planner_preflight_or_die():
     if problems:
         for p in problems:
             print(f"❌ {p}")
+        sys.exit(1)
+
+
+def cast_keys_or_die(available, solo=False):
+    """Key gate. An ensemble run needs two cast keys; a solo run needs one
+    (plus the director key, checked separately). Solo = --solo, or a show
+    whose cast.json has exactly one character — nothing else is possible
+    there, so no flag is required."""
+    needed = 1 if (solo or len(CAST) == 1) else 2
+    if len(available) < needed:
+        print("❌ Need the cast member's API key." if needed == 1
+              else "❌ Need at least 2 API keys.")
+        sys.exit(1)
+
+
+def solo_cast_or_die(cast_ids):
+    """--solo must resolve to exactly one cast member."""
+    if len(cast_ids) != 1:
+        print("❌ --solo runs exactly one cast member — pick them with --cast <id>")
         sys.exit(1)
 
 
@@ -196,11 +226,22 @@ def main():
     parser.add_argument("--video", action="store_true",
                         help="Compose a 9:16 MP4 per scene: character name cards + dialogue "
                              "text + TTS audio. Implies --audio (in the default tts mode).")
-    parser.add_argument("--render-mode", choices=["tts", "veo"], default="tts",
+    parser.add_argument("--render-mode", choices=["tts", "veo", "vlog"], default="tts",
                         help="Video source: 'tts' composes cards over the TTS track (default — "
                              "persistent voices, editable, cheap); 'veo' generates real footage "
                              "per beat via Veo (needs GEMINI_API_KEY + uv sync --extra veo; "
-                             "expensive, voices drift between clips)")
+                             "expensive, voices drift between clips); 'vlog' is all-generated "
+                             "solo-host footage with the speech-to-speech voice swap — "
+                             "persistent voice AND real footage (uv sync --extra vlog)")
+    parser.add_argument("--clips-dir", type=str, default="", metavar="DIR",
+                        help="Vlog bring-your-own-clips route: a folder of beat_<n>.mp4 files "
+                             "you generated externally (e.g. the Veo web UI — subscription "
+                             "quota, no API cost). Validated against the clip plan before any "
+                             "ElevenLabs spend. Requires --from-script --video --render-mode vlog")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="Vlog only: print the clip plan (count, durations, on-camera vs "
+                             "voiceover split, ESTIMATED cost) and write the per-beat prompt "
+                             "pack, then exit — nothing is generated, nothing is billed")
     parser.add_argument("--planner", action="store_true",
                         help="LangGraph pacing layer: a planner writes the scene's turn-by-turn "
                              "emotional arc before dialogue and the director follows it "
@@ -211,11 +252,44 @@ def main():
     parser.add_argument("--data-dir", type=str, default=None,
                         help="Show directory to load instead of data/ (applied at startup "
                              "by the CLI bootstrap; also settable as EXEC_PRODUCER_DATA_DIR)")
+    parser.add_argument("--solo", action="store_true",
+                        help="Solo run: exactly one cast member, so one cast key + the "
+                             "director key suffice. A one-character show is solo "
+                             "automatically; on a bigger cast pick the member with --cast <id>")
+    parser.add_argument("--from-script", type=str, default=None, metavar="SCENE_JSON",
+                        help="Render an externally-written scene .json (the engine's own "
+                             "saved shape) through the downstream stages only — .txt, --eval, "
+                             "--audio, --video, --produce. Makes no generation calls and needs "
+                             "no director key (except --produce, which bills the director "
+                             "model). Intensity comes from the file. "
+                             "Sugar: exec-producer render <file>")
 
-    args = parser.parse_args()
+    # `exec-producer render <scene.json>` is sugar for --from-script. The
+    # token may follow leading flags (--data-dir X render f.json) — it is
+    # only skipped when it's the VALUE of a value-taking option, so
+    # `--scene render` still means a scene literally named "render".
+    value_flags = {"--scene", "--cast", "--lines", "--episode", "--intensity",
+                   "--render-mode", "--thread", "--data-dir", "--from-script",
+                   "--clips-dir"}
+    argv = sys.argv[1:]
+    for i, tok in enumerate(argv):
+        if tok == "render" and (i == 0 or argv[i - 1] not in value_flags):
+            argv = argv[:i] + ["--from-script"] + argv[i + 1:]
+            break
+
+    args = parser.parse_args(argv)
     if args.thread and not args.planner:
         print("❌ --thread resumes a --planner run — add --planner")
         sys.exit(1)
+    if args.from_script:
+        # Render is downstream-only: flags that shape GENERATION are a
+        # contradiction the user should hear about, not a silent no-op.
+        for flag in ("scene", "episode", "planner", "cast", "solo",
+                     "no_save", "director_only"):
+            if getattr(args, flag):
+                print(f"❌ --{flag.replace('_', '-')} doesn't compose with --from-script — "
+                      "the script is already written; render runs only downstream stages")
+                sys.exit(1)
     for flag in ("audio", "video"):
         if getattr(args, flag) and args.no_save:
             print(f"❌ --{flag} needs saved outputs — drop --no-save")
@@ -223,9 +297,18 @@ def main():
         if getattr(args, flag) and args.director_only:
             print(f"❌ --{flag} renders full dialogue, which defeats --director-only redaction")
             sys.exit(1)
-    if args.render_mode == "veo" and not args.video:
-        print("❌ --render-mode veo only makes sense with --video")
+    if args.render_mode != "tts" and not args.video:
+        print(f"❌ --render-mode {args.render_mode} only makes sense with --video")
         sys.exit(1)
+    if args.audio and args.render_mode == "vlog":
+        print("❌ --audio doesn't compose with --render-mode vlog — vlog renders its own "
+              "audio internally (TTS + voice swap); the separate track would just double-bill")
+        sys.exit(1)
+    for flag, name in ((args.clips_dir, "--clips-dir"), (args.dry_run, "--dry-run")):
+        if flag and not (args.from_script and args.render_mode == "vlog"):
+            print(f"❌ {name} is part of the vlog render path — "
+                  "use with --from-script --video --render-mode vlog")
+            sys.exit(1)
     if args.produce and args.no_save:
         print("❌ --produce writes production files — drop --no-save")
         sys.exit(1)
@@ -234,8 +317,13 @@ def main():
         args.audio = True
     setup_logging(debug=args.debug)
     # Run-log wall clock starts here; the JSONL file (with its audit header)
-    # is created on the first LLM call
-    start_run(header={"audit": AUDIT})
+    # is created on the first LLM call. Render runs carry the external-
+    # generator stamp in the header too, matching their saved outputs.
+    if args.from_script:
+        from .render import EXTERNAL_AUDIT
+        start_run(header={"audit": {**AUDIT, **EXTERNAL_AUDIT}})
+    else:
+        start_run(header={"audit": AUDIT})
 
     if args.list:
         print("\nSCENES:")
@@ -254,16 +342,65 @@ def main():
             print()
         sys.exit(0)
 
+    if args.from_script:
+        from .render import load_external_scene, render_external_scene
+        try:
+            # Validation is the hard boundary: it runs before ANY spend —
+            # before the media preflight, before any key is even checked.
+            data = load_external_scene(args.from_script)
+        except ConfigError as e:
+            print(f"❌ {e}")
+            sys.exit(1)
+        if args.video and args.render_mode == "vlog":
+            # Plan problems (bad delivery markers, bad vlog config) and a
+            # mismatched clips folder must all fail here — before the judge,
+            # TTS, or Veo spend a cent. --dry-run stops here by design.
+            from .vlog import (build_clip_plan, describe_plan, validate_clips_dir,
+                               vlog_config, write_prompt_pack)
+            try:
+                cfg = vlog_config()
+                plan = build_clip_plan(data["conversation"], data["scene"], cfg)
+            except (ValueError, json.JSONDecodeError) as e:
+                print(f"❌ {e}")
+                sys.exit(1)
+            if args.dry_run:
+                print(describe_plan(plan, cfg, clips_dir=args.clips_dir or None))
+                script = Path(args.from_script)  # any extension, not just .json
+                pack = str(script.with_name(script.stem + "_vlog_prompts.txt"))
+                write_prompt_pack(plan, pack, cfg)
+                print(f"📝 Clip prompts written to: {pack}\n"
+                      "   Generate the clips (Veo web UI or any tool), drop them in a "
+                      "folder, then re-run with --clips-dir <folder>. Nothing was billed.")
+                sys.exit(0)
+            if args.clips_dir:
+                problems = validate_clips_dir(args.clips_dir, plan)
+                if problems:
+                    for p in problems:
+                        print(f"❌ {p}")
+                    sys.exit(1)
+        if args.produce:
+            director_key_or_die()  # --produce bills the director model
+        if args.audio or args.video:
+            media_preflight_or_die(data["cast_ids"], audio=args.audio,
+                                   video=args.video, render_mode=args.render_mode,
+                                   clips_dir=args.clips_dir)
+        opts = RunOptions(produce=args.produce, debug=args.debug,
+                          evaluate=args.eval, audio=args.audio,
+                          video=args.video, render_mode=args.render_mode,
+                          clips_dir=args.clips_dir)
+        render_external_scene(data, opts)
+        return
+
     if args.episode:
         if args.episode not in EPISODES:
             print(f"❌ Unknown episode: {args.episode}")
             print(f"Available: {', '.join(EPISODES.keys())}")
             sys.exit(1)
         cast_ids = resolve_cast(args.cast)
+        if args.solo:
+            solo_cast_or_die(cast_ids)
         available, _ = check_api_keys(cast_ids)
-        if len(available) < 2:
-            print("❌ Need at least 2 API keys.")
-            sys.exit(1)
+        cast_keys_or_die(available, solo=args.solo)
         director_key_or_die()
         if args.audio or args.video:
             media_preflight_or_die(available, audio=args.audio, video=args.video,
@@ -289,10 +426,10 @@ def main():
             print(f"Available: {', '.join(SCENES.keys())}")
             sys.exit(1)
         cast_ids = resolve_cast(args.cast)
+        if args.solo:
+            solo_cast_or_die(cast_ids)
         available, _ = check_api_keys(cast_ids)
-        if len(available) < 2:
-            print("❌ Need at least 2 API keys.")
-            sys.exit(1)
+        cast_keys_or_die(available, solo=args.solo)
         director_key_or_die()
         if args.audio or args.video:
             media_preflight_or_die(available, audio=args.audio, video=args.video,

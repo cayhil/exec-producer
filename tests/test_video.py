@@ -187,11 +187,13 @@ def test_render_scene_video_errors_without_encoder(tmp_path, fake_media, monkeyp
 # ── preflight ────────────────────────────────────────────
 
 def test_preflight_ok(monkeypatch):
+    pytest.importorskip("PIL")  # video extra — skip on a bare clone
     monkeypatch.setattr(video, "pick_h264_encoder", lambda configured="": "libx264")
-    assert video.preflight() == []  # PIL is installed in the dev env
+    assert video.preflight() == []
 
 
 def test_preflight_reports_missing_encoder(monkeypatch):
+    pytest.importorskip("PIL")  # video extra — skip on a bare clone
     monkeypatch.setattr(video, "pick_h264_encoder", lambda configured="": None)
     problems = video.preflight()
     assert len(problems) == 1 and "H.264" in problems[0]
@@ -359,8 +361,9 @@ def test_generate_veo_clip_times_out():
 
 
 def test_veo_preflight(monkeypatch):
+    pytest.importorskip("google.genai")  # veo extra — skip on a bare clone
     monkeypatch.setattr(video, "pick_h264_encoder", lambda configured="": "libx264")
     monkeypatch.setenv("GEMINI_API_KEY", "k")
-    assert video.veo_preflight() == []  # google-genai installed in the dev env
+    assert video.veo_preflight() == []
     monkeypatch.delenv("GEMINI_API_KEY")
     assert any("GEMINI_API_KEY" in p for p in video.veo_preflight())

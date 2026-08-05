@@ -1,0 +1,18 @@
+{
+  "provider": "elevenlabs",
+  "defaults": {
+    "model_id": "eleven_multilingual_v2",
+    "output_format": "mp3_44100_128",
+    "gap_seconds": 0.4,
+    "voice_settings": {
+      "stability": 0.5,
+      "similarity_boost": 0.75
+    }
+  },
+  "voices": {
+    "marlow": {
+      "voice_id": "pFZP5JQG7iQjIQuC4Bku",
+      "note": "ElevenLabs premade 'Lily' — velvety, warm; fits an overnight radio voice"
+    }
+  }
+}

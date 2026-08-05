@@ -54,7 +54,8 @@ class RunOptions:
     evaluate: bool = False
     audio: bool = False
     video: bool = False
-    render_mode: str = "tts"  # or "veo": Veo-native footage instead of cards
+    render_mode: str = "tts"  # or "veo"/"vlog": generated footage instead of cards
+    clips_dir: str = ""       # vlog bring-your-own-clips folder (via --from-script)
 
 
 def effective_intensity(requested):
@@ -76,6 +77,11 @@ def effective_intensity(requested):
 
 def build_cast_sheet(cast_ids):
     """Build a cast reference sheet with names, genders, and roles."""
+    if len(cast_ids) == 1:
+        c = CAST[cast_ids[0]]
+        gender_label = {"guy": "he/him", "girl": "she/her"}.get(c["gender"], c["gender"])
+        return ("THE CAST — just you. This is a solo show; no one else is on camera:\n"
+                f"  - {c['name']} ({gender_label}) — {c['tagline']}")
     lines = ["THE CAST (memorize — these are the people in the house with you):"]
     for cid in cast_ids:
         c = CAST[cid]
@@ -243,6 +249,9 @@ class CharacterSession:
 # ─────────────────────────────────────────────
 def get_scene_cast(scene, all_cast_ids, plot=""):
     """Ask the director which cast members should be in this scene."""
+    # A solo show has nothing to cast — skip the director call entirely.
+    if len(all_cast_ids) == 1:
+        return list(all_cast_ids)
     cast_list = "\n".join(f"  - {CAST[c]['name']} ({c}): {CAST[c]['tagline']}" for c in all_cast_ids)
     plot_text = f"\nPLOT: {plot}" if plot else ""
 
@@ -601,6 +610,14 @@ def render_video_stage(opts, scene, conversation, director_notes, cast_ids,
     instead of billing a second generation that wouldn't even match the
     rendered clips. Never raises — a dead video stage must not lose the
     outputs already saved."""
+    if opts.render_mode == "vlog":
+        from .vlog import render_vlog_video  # lazy: media stage
+        try:
+            return render_vlog_video(conversation, scene, prefix,
+                                     clips_dir=opts.clips_dir), None
+        except Exception as e:
+            print(f"  ⚠️  Vlog rendering failed ({type(e).__name__}: {e}) — earlier outputs still saved")
+            return None, None
     if opts.render_mode == "veo":
         production = generate_production_prompts(scene, conversation, director_notes, cast_ids)
         if not production:
@@ -729,13 +746,17 @@ def run_scene(scene_id, cast_ids, opts=None, sessions=None):
 
 
 def save_scene_outputs(scene_id, scene, conversation, director_notes, cast_ids,
-                       opts, intensity, extra_json=None, standalone=True):
+                       opts, intensity, extra_json=None, standalone=True,
+                       audit_extra=None):
     """Everything after a scene's dialogue loop: judge eval, script + .json
     saves, media stages, scorecard file, run summary. Shared by the classic
-    loop and the --planner graph so both paths carry identical output
-    guarantees. extra_json merges additional top-level keys (e.g. the
-    planner's arc) into the saved .json. Returns the scorecard (None unless
-    opts.evaluate produced one)."""
+    loop, the --planner graph, and the --from-script render path so all
+    three carry identical output guarantees. extra_json merges additional
+    top-level keys (e.g. the planner's arc) into the saved .json;
+    audit_extra merges into the audit block (e.g. the render path's
+    generator stamp). Returns the scorecard (None unless opts.evaluate
+    produced one)."""
+    audit = {**AUDIT, **(audit_extra or {})}
     director_only = opts.director_only
     # pid in the prefix: two same-second runs must not overwrite each other
     # (the JSONL run log already does this — telemetry.RunLog)
@@ -789,6 +810,7 @@ def save_scene_outputs(scene_id, scene, conversation, director_notes, cast_ids,
         json_filename = f"{prefix}.json"
         with open(json_filename, "w") as f:
             json.dump({
+                "scene_id": scene_id,  # round-trip seam: --from-script reuses it
                 "scene": scene,
                 **({"audio_track": audio_track} if audio_track else {}),
                 **({"video_track": video_track} if video_track else {}),
@@ -800,7 +822,7 @@ def save_scene_outputs(scene_id, scene, conversation, director_notes, cast_ids,
                                "tagline": CAST[cid]["tagline"]} for cid in cast_ids},
                 "generated": datetime.now().isoformat(),
                 "telemetry": telemetry.get_run_log().summary(),
-                "audit": AUDIT,
+                "audit": audit,
             }, f, indent=2)
         if not director_only:
             print(f"📊 Raw data saved to: {json_filename}")
@@ -821,7 +843,7 @@ def save_scene_outputs(scene_id, scene, conversation, director_notes, cast_ids,
                     "judge_model": JUDGE_MODEL,
                     "scorecard": scorecard,
                     "generated": datetime.now().isoformat(),
-                    "audit": AUDIT,
+                    "audit": audit,
                 }, f, indent=2)
             if not director_only:
                 print(f"📋 Scorecard saved to: {eval_filename}")
@@ -978,7 +1000,9 @@ def save_episode_outputs(episode_id, episode, all_conversations, cast_ids,
             if track and not director_only:
                 print(f"🔊 Scene {i + 1} audio saved to: {track}")
     if opts.save and opts.video:
-        if opts.render_mode != "veo" and not opts.audio:
+        # Only tts mode composes over the audio stage's files — veo and vlog
+        # bring their own audio pipelines and must not require --audio.
+        if opts.render_mode == "tts" and not opts.audio:
             print("  ⚠️  Video skipped — TTS-composited video needs the audio stage")
         else:
             for i, scene_data in enumerate(all_conversations):

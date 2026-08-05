@@ -42,7 +42,7 @@ Feels like useful information."               for a week and then you'd never le
 - **Media pipeline with explicit tradeoffs.** Persistent ElevenLabs voices + Pillow-composed video
   by default; Veo-native generation as a gated, priced-in opt-in. Text is drawn by Pillow
   specifically so minimal ffmpeg builds (no drawtext/libass) still work.
-- **~140 unit tests, zero network.** All LLM/TTS/ffmpeg calls mocked; the suite runs in ~3 seconds.
+- **~220 unit tests, zero network.** All LLM/TTS/ffmpeg calls mocked; the suite runs in ~3 seconds.
 
 ## 60-second quickstart
 
@@ -97,15 +97,34 @@ generates the line → repeat. Episodes keep sessions alive across scenes; chara
 | `--audio` | Per-line TTS in each character's persistent voice, stitched per scene (`uv sync --extra audio`) |
 | `--video` | 9:16 MP4: character cards + dialogue text + TTS audio; exact-timing SRT for editing (`--extra video`) |
 | `--video --render-mode veo` | Real generated footage per beat via Veo — expensive, gated (`--extra veo`) |
+| `--video --render-mode vlog` | Solo-host generated footage + speech-to-speech voice swap; `--dry-run` cost preview, `--clips-dir` for externally-generated clips (`--extra vlog`) |
 | `--planner` | LangGraph pacing arc written before dialogue; `--thread <id>` resumes from checkpoint (`--extra planner`) |
 | `--produce` | Copy-paste image/video prompts for manual production |
 | `--director-only` | Full run with all dialogue redacted — demo the orchestration, not the content |
 | `--data-dir` | Point the engine at any show directory ([CREATING_A_SHOW.md](CREATING_A_SHOW.md)) |
+| `--solo` | Run one cast member from a bigger show (one cast key + the director key). One-character shows are solo automatically |
+| `render <file>` / `--from-script` | Render an externally-written scene .json through the downstream stages only — no generation calls, audit stamped `generator: external` |
+
+## Bring your own script
+
+`exec-producer render <scene.json>` accepts a scene in the engine's own saved-JSON shape and
+runs ONLY the downstream stages — .txt formatting, `--eval`, `--audio`, `--video`, `--produce`.
+Validation is hard and happens before any TTS/video spend; the audit block records
+`generator: "external"` with generation cost unknown (the TTS-cost precedent). No director key
+needed (except `--produce`, which bills the director model).
+
+The intended workflow ships as a committed Claude Code skill
+([.claude/skills/showrunner/SKILL.md](.claude/skills/showrunner/SKILL.md)): describe an episode
+idea in a session, the session writes the scene JSONs on your subscription — zero generation API
+spend — self-reviews them against the show's eval rubric, renders each scene, and emits YouTube
+packaging (titles, thumbnail prompt, description, hook). The JSON contract is documented in the
+skill, so any agent harness can produce render-ready scenes. LiteLLM remains the engine's single
+model-access layer — the decoupling is the file contract, not a wired-in provider.
 
 ## Audio modes — the `--video` tradeoff
 
-The video stage has two render modes, and the choice is a real production tradeoff, not a settings
-knob:
+The video stage has three render modes, and the choice is a real production tradeoff, not a
+settings knob:
 
 ### `tts` (default) — TTS-composited
 
@@ -130,8 +149,48 @@ own API key (`GEMINI_API_KEY`), and its own optional dependency — never a defa
   different from beat to beat — acceptable for a one-off clip, wrong for a series.
 - **Expensive:** video generation bills per second of output; a scene costs dollars, not cents.
 
+### `vlog` (`--render-mode vlog`) — generated footage with a persistent voice
+
+The third mode resolves the tradeoff for solo-host shows by combining the other two: **real
+generated footage AND a consistent voice**, via a speech-to-speech voice swap.
+
+- **Everything on screen is generated video** — selfie-vlog POV of the host mixed with cinematic
+  b-roll, moving camera, ambient life. No stills, no name cards, ever, in this mode.
+- **Per-line delivery markers** in the scene JSON (`"delivery": "on_camera" | "voiceover"`)
+  control *audio* treatment only — every beat becomes a full clip either way:
+  - *on_camera*: the clip is generated with the host speaking the line (reference images +
+    quoted dialogue in the prompt). The clip's audio is extracted, run through **ElevenLabs
+    speech-to-speech** into the host's persistent voice (`voices.json`), and remuxed. Same words +
+    same timing keeps the lips plausibly synced — and the host sounds identical in every clip of
+    every episode.
+  - *voiceover*: the clip generates with ambient sound only; the line renders via the TTS stage
+    and is mixed over the clip with the ambient bed ducked underneath.
+- **Host visual consistency** comes from reference images (`visuals.json` →
+  `characters.<id>.reference_images`, up to 3) attached to every generation with the host in
+  frame. API constraint (verified July 2026): reference images force 8-second clips and reject
+  9:16 output — a 9:16 show generates those beats at 16:9 with a centered-subject prompt and
+  center-crops in post. 16:9, the native YouTube vlog format, is the default.
+- **Three ways to get the clips**, one downstream pipeline (voice swap, voiceover mix, assembly,
+  exact-timing SRT — identical regardless of where the pixels came from):
+
+  | Route | How | Cost profile |
+  |---|---|---|
+  | Veo API | automated per-beat generation, polled, telemetry-receipted | bills per second — dominates every other cost |
+  | Veo web UI | `--dry-run` emits a per-beat prompt pack; generate on your subscription quota, drop files in a folder, render with `--clips-dir` | no API cost; manual; possible watermark |
+  | any other tool | same prompt pack, same beat-numbered folder contract | whatever the tool costs |
+
+- **Cost controls are mandatory, not optional:** `--dry-run` prints the clip plan (count,
+  durations, on-camera/voiceover split) and an ESTIMATED cost (configurable
+  `vlog.price_per_second` in `visuals.json`) before anything generates; `vlog.max_clips` caps the
+  API route per run with a clear error; every Veo call and voice-swap call lands in the JSONL
+  telemetry.
+
+> **Disclosure note:** YouTube requires creators to disclose realistic altered or synthetic
+> content — a photorealistic synthetic host qualifies. Tick the disclosure box when uploading.
+
 The engine treats the tradeoff explicitly: persistent identity + auditability + cost by default,
-native footage as a deliberate opt-in.
+native footage as a deliberate opt-in, and the vlog mode as the composition of both for solo
+shows.
 
 ## Evaluation, and what the planner experiment actually showed
 
@@ -190,12 +249,17 @@ Every run produces, without any flags:
 
 ## Creating your own show
 
-A show is a directory of JSON + prompt files — no Python. Copy the starter, edit, point the engine
-at it:
+A show is a directory of JSON + prompt files — no Python. Two starters are committed, one per
+format — copy whichever matches, edit, point the engine at it:
+
+- **`examples/sunset_terrace`** — a four-person ensemble (the classic director-casts-a-house format)
+- **`examples/night_signal`** — a one-character solo show (an overnight radio host; the director
+  loop degenerates to beat direction + pacing, and a single cast key + the director key suffice)
 
 ```bash
 cp -r examples/sunset_terrace my_show
 uv run exec-producer --data-dir my_show --scene rooftop_welcome --lines 6
+uv run exec-producer --data-dir examples/night_signal --scene sign_on --lines 4
 ```
 
 The full data contract (and what every file does) is in
@@ -215,8 +279,8 @@ The image bundles ffmpeg + fonts (full media pipeline) and ships only the starte
 ## Development
 
 ```bash
-uv run pytest        # ~140 tests, all LLM/TTS/ffmpeg calls mocked, no network
-uv sync --all-extras # audio + video + veo + planner extras
+uv run pytest        # ~220 tests, all LLM/TTS/ffmpeg calls mocked, no network
+uv sync --all-extras # audio + video + veo + vlog + planner extras
 ```
 
 Notable pins: `litellm >=1.83,<1.92` (1.92 drops pure-Python wheels; the cap keeps Python 3.14

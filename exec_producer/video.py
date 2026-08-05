@@ -316,13 +316,11 @@ def veo_client():
     return genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
 
 
-def _generate_veo_clip(client, model, prompt, poll_seconds, timeout_seconds):
-    """One beat → one clip: submit, poll the long-running operation, download.
+def poll_veo_operation(client, op, poll_seconds, timeout_seconds):
+    """Poll a submitted Veo long-running operation to completion and download
+    the clip bytes. The ONE copy of this loop — shared by the veo and vlog
+    render modes so an operations-API change can't silently skew one of them.
     Veo generation runs minutes per clip; the deadline stops a stuck poll."""
-    from google.genai import types  # lazy: optional veo dep
-    op = client.models.generate_videos(
-        model=model, prompt=prompt,
-        config=types.GenerateVideosConfig(aspect_ratio="9:16"))
     deadline = time.time() + timeout_seconds
     while not op.done:
         if time.time() > deadline:
@@ -330,6 +328,15 @@ def _generate_veo_clip(client, model, prompt, poll_seconds, timeout_seconds):
         time.sleep(poll_seconds)
         op = client.operations.get(op)
     return client.files.download(file=op.response.generated_videos[0].video)
+
+
+def _generate_veo_clip(client, model, prompt, poll_seconds, timeout_seconds):
+    """One beat → one clip: submit, then poll/download."""
+    from google.genai import types  # lazy: optional veo dep
+    op = client.models.generate_videos(
+        model=model, prompt=prompt,
+        config=types.GenerateVideosConfig(aspect_ratio="9:16"))
+    return poll_veo_operation(client, op, poll_seconds, timeout_seconds)
 
 
 def render_veo_video(beats, out_prefix, client=None, poll_seconds=15, timeout_seconds=900):

@@ -65,6 +65,28 @@ class ElevenLabsBackend:
         )
         return b"".join(chunks)
 
+    def convert_speech(self, audio_path, voice):
+        """Speech-to-speech: re-voice existing audio into this character's
+        persistent voice, keeping words and timing (the --render-mode vlog
+        voice-normalization step — same words + same timing keeps Veo's lip
+        movement plausibly synced). Note the sts model id: speech-to-speech
+        uses its own model family, not the TTS one."""
+        cfg = {**self.defaults, **voice}
+        kwargs = {}
+        if cfg.get("voice_settings"):
+            # Unlike text_to_speech, the STS endpoint takes voice_settings as
+            # a JSON string (multipart form field), not the typed model.
+            kwargs["voice_settings"] = json.dumps(cfg["voice_settings"])
+        with open(audio_path, "rb") as f:
+            chunks = self.client.speech_to_speech.convert(
+                voice_id=cfg["voice_id"],
+                audio=f,
+                model_id=cfg.get("sts_model_id", "eleven_multilingual_sts_v2"),
+                output_format=cfg.get("output_format", "mp3_44100_128"),
+                **kwargs,
+            )
+            return b"".join(chunks)
+
 
 def get_backend(provider, defaults):
     """TTS backend factory — the seam where a different provider would plug

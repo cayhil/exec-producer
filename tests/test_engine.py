@@ -712,6 +712,28 @@ def test_run_episode_veo_mode_without_audio(monkeypatch, tmp_path):
     assert "audio_tracks" not in data
 
 
+def test_run_episode_vlog_mode_without_audio(monkeypatch, tmp_path):
+    # The episode wrap must render vlog video WITHOUT --audio (vlog brings
+    # its own audio pipeline, like veo) — regression: the gate used to skip
+    # every non-veo mode lacking --audio, silently dropping vlog video after
+    # the whole episode's generation spend.
+    from exec_producer import vlog as vlog_mod
+    episode_harness(monkeypatch, tmp_path)
+    rendered = []
+    monkeypatch.setattr(vlog_mod, "render_vlog_video",
+                        lambda conversation, scene, prefix, clips_dir="":
+                        rendered.append(prefix) or f"{prefix}_video.mp4")
+
+    engine.run_episode("test_ep", CAST_IDS,
+                       engine.RunOptions(video=True, render_mode="vlog"))
+
+    assert len(rendered) == 2  # one vlog render per scene, no --audio needed
+    ep_jsons = [p for p in (tmp_path / "scripts").glob("test_show_episode_test_ep_*.json")
+                if not p.name.endswith("_eval.json")]
+    data = json.loads(ep_jsons[0].read_text())
+    assert data["video_tracks"] == [p + "_video.mp4" for p in rendered]
+
+
 def test_run_episode_no_save_writes_nothing(monkeypatch, tmp_path):
     episode_harness(monkeypatch, tmp_path)
     engine.run_episode("test_ep", CAST_IDS, engine.RunOptions(save=False))

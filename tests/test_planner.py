@@ -147,6 +147,7 @@ def test_routes():
 # ── full graph runs ──────────────────────────────────────
 
 def test_run_scene_planned_end_to_end(monkeypatch, tmp_path):
+    pytest.importorskip("langgraph")  # planner extra — skip on a bare clone
     calls = planner_harness(monkeypatch, tmp_path)
     monkeypatch.setattr(planner, "_new_thread_id", lambda prefix: "scene_test_1")
 
@@ -169,6 +170,7 @@ def test_run_scene_planned_end_to_end(monkeypatch, tmp_path):
 
 
 def test_run_episode_planned_transitions_and_casting(monkeypatch, tmp_path):
+    pytest.importorskip("langgraph")  # planner extra — skip on a bare clone
     planner_harness(monkeypatch, tmp_path)
     monkeypatch.setattr(planner, "_new_thread_id", lambda prefix: "episode_ep_1")
     monkeypatch.setattr(engine, "SCENES", {"s1": {"name": "One", "prompt": "p", "mood": "m"},
@@ -194,6 +196,7 @@ def test_run_episode_planned_transitions_and_casting(monkeypatch, tmp_path):
 
 
 def test_resume_from_checkpoint_skips_paid_turns(monkeypatch, tmp_path):
+    pytest.importorskip("langgraph")  # planner extra — skip on a bare clone
     # Crash on the third character line, then resume the same thread: the
     # first two turns must come from the checkpoint, not fresh LLM calls.
     calls = planner_harness(monkeypatch, tmp_path, lines_fail_on={3})
@@ -229,6 +232,7 @@ def test_resume_rejects_wrong_run_type(monkeypatch, tmp_path):
 
 
 def test_resume_rejects_unknown_thread(monkeypatch, tmp_path):
+    pytest.importorskip("langgraph")  # planner extra — skip on a bare clone
     planner_harness(monkeypatch, tmp_path)
     from exec_producer.errors import ThreadResumeError
     with pytest.raises(ThreadResumeError, match="unknown planner thread"):
@@ -262,6 +266,9 @@ def test_cli_planner_dispatch_and_preflight(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(planner, "run_scene_planned",
                         lambda scene_id, cast, opts, thread_id=None:
                         captured.update(scene=scene_id, thread=thread_id))
+    # Mock the happy-path preflight too: this test is about CLI dispatch, and
+    # must not depend on langgraph being installed (bare-clone runs).
+    monkeypatch.setattr(planner, "preflight", lambda: [])
 
     _cli_main(monkeypatch, ["--scene", "test", "--planner", "--thread", "t9"])
     assert captured == {"scene": "test", "thread": "t9"}

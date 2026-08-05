@@ -10,7 +10,9 @@ export EXEC_PRODUCER_DATA_DIR=path/to/your_show
 ```
 
 Resolution order: `--data-dir` (or the env var) → the repo's `data/` directory if it exists → the
-committed starter show at `examples/sunset_terrace/`. The fastest way to build a show is to copy the starter and edit:
+committed starter show at `examples/sunset_terrace/`. Two starters are committed: the ensemble
+`examples/sunset_terrace/` and the solo `examples/night_signal/` (one host — see "Solo shows"
+below). The fastest way to build a show is to copy whichever starter matches your format and edit:
 
 ```bash
 cp -r examples/sunset_terrace my_show
@@ -72,7 +74,25 @@ One entry per character. The key (e.g. `"jax"`) is the id used everywhere else.
 - `relationships` — id → how they privately feel about that housemate.
 
 A character needs its provider's API key set in `.env` to appear; the engine runs with whichever
-cast members have keys (minimum two).
+cast members have keys (minimum two for an ensemble show, one for a solo show — see below).
+
+## Solo shows (a cast of one)
+
+A `cast.json` with exactly one character is a valid show — the committed starter
+`examples/night_signal` (an overnight radio host) is the working example. Nothing else changes in
+the contract; the engine adapts by cast size:
+
+- The key gate relaxes to one cast key + the director key. No flag needed — a one-character show
+  can only run solo. (To run a single member of a *bigger* cast, pass `--solo --cast <id>`.)
+- Scene casting is skipped (there is nobody to cast), the cast sheet switches to solo phrasing,
+  and the director's per-turn choice becomes pure beat direction: pacing, stage directions,
+  emotional temperature. MONOLOGUE-style direction is the workhorse.
+- Write the prompt files for one voice: night_signal's `director.txt` swaps speaker-picking rules
+  for beat-pacing rules, its `tone_face_to_face.txt` becomes "the mic is hot" audience-address
+  rules, and `critical_rules.txt` bans invented callers/co-hosts — the classic failure mode of a
+  solo scene. Its `casting.txt` exists only to satisfy the contract (it documents this itself).
+- Everything downstream is unchanged: episodes, `--planner` pacing, `--eval`, `--audio`,
+  `--video`, telemetry, and the audit block all work identically on a solo run.
 
 ## scenes.json and episodes.json
 
@@ -96,3 +116,45 @@ phase vocabulary, the JSON schema) are yours to tune.
 `voices.json` maps character id → a persistent TTS voice id (`--audio`), plus defaults (TTS model,
 inter-line gap). `visuals.json` sets per-character card colors and video defaults (`--video`);
 without it, cards fall back to a built-in palette.
+
+## Vlog mode (`--video --render-mode vlog`)
+
+The vlog mode (solo-host generated footage with a persistent voice — see README for the full
+tradeoff) reads two extra pieces of show data:
+
+### Host reference images
+
+Generate a set of 1-3 photos of your host once (any image tool), store them in the show
+directory, and map them in `visuals.json` — they're attached to every Veo generation with the
+host in frame, which is what keeps the host looking like the same person across clips:
+
+```json
+{
+  "characters": {
+    "marlow": {
+      "color": "#232946",
+      "reference_images": ["refs/marlow_front.png", "refs/marlow_side.png"]
+    }
+  },
+  "vlog": {
+    "aspect": "16:9",
+    "price_per_second": 0.40,
+    "max_clips": 12
+  }
+}
+```
+
+The `vlog` block (all optional): `aspect` (`16:9` default, or `9:16` — reference-image beats
+then generate 16:9 and center-crop, a Veo API constraint), `price_per_second` (enables the
+`--dry-run` cost ESTIMATE — check current Veo pricing), `max_clips` (hard cap per API-route run),
+`duck_volume` (ambient bed level under voiceover lines), `veo_model`, `fps`, `video_codec`.
+Speech-to-speech uses `sts_model_id` from `voices.json` defaults (default
+`eleven_multilingual_sts_v2`).
+
+### Delivery markers
+
+Scene-JSON conversation lines may carry `"delivery": "on_camera"` (default) or `"voiceover"` —
+audio treatment only; every line becomes a full video clip. Optional per-line `"shot"` (the
+Veo shot description; a deterministic template fills in when absent) and `"host_in_frame"`
+(default: true for on_camera, false for voiceover) refine what's on screen. The showrunner
+skill writes all three when scripting vlog episodes.

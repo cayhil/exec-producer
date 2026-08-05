@@ -70,6 +70,14 @@ def test_safe_id_validation():
         config._require_safe_ids("test", ["has'quote", "has space"])
 
 
+def test_committed_starter_shows_satisfy_contract():
+    # Both public example shows must always ship the full data contract —
+    # night_signal is also the proof that a one-character cast is a valid show.
+    root = Path(config.__file__).resolve().parent.parent
+    for show in ("sunset_terrace", "night_signal"):
+        assert config.validate_data_dir(root / "examples" / show) == [], show
+
+
 def test_show_identity_defaults():
     # The loaded show defines both keys; absence must fall back, not crash —
     # exercised via the same .get defaults the config module uses.
