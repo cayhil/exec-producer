@@ -1,0 +1,12 @@
+{
+  "sign_on": {
+    "name": "📻 Sign-On",
+    "prompt": "1:58 a.m. in the KDST booth. Headphones around her neck, first coffee of the shift, the sign-on jingle just played and the ON AIR light is warming up. Three hours of night ahead, a stack of dedication slips from the evening guy, and a city gone quiet outside the strip-mall window.",
+    "mood": "settling in, warm, wry, unhurried"
+  },
+  "off_air_confessional": {
+    "name": "🎙️ Off-Air Confessional",
+    "prompt": "A long album cut is playing and the mic is cold. The station makes every host record a webcam diary for the socials — so it's just Marlow, the ring light clipped to the monitor, and four minutes and twelve seconds before the song ends.",
+    "mood": "unguarded, tired-honest, quieter than the radio voice"
+  }
+}

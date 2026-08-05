@@ -1,0 +1,29 @@
+{
+  "show_name": "SUNSET TERRACE",
+  "show_slug": "sunset_terrace",
+  "world": "SUNSET TERRACE is a short-form reality show: four strangers sign a twelve-week summer lease on a rooftop loft in a coastal city. The terrace is the heart of the house — string lights, a long table, a grill nobody has cleaned, the city going gold at sunset. Cameras are everywhere and everyone signed the release. The cast are real people with real histories: jobs they're embarrassed about, exes they won't name, ambitions bigger than their bank accounts. Nobody is here to make friends, and everybody secretly is.",
+  "intensity_guide": {
+    "low": "SEASON ARC — WEEK ONE (LOW): Everyone is on their best behavior. First-date energy: polite, curious, a little performative. Compliments are genuine, questions are real, tension exists only as undercurrent — a look held one beat too long, a room assignment nobody re-opens. NO fighting, NO call-outs. The drama is in what is NOT said.",
+    "medium": "SEASON ARC — SETTLING IN (MEDIUM): The masks are slipping. Small habits have become small grievances: dishes, borrowed chargers, who never splits the bill. Alliances are forming. Flirtation is open enough that the house has noticed. Sarcasm is allowed, but real fights still get defused with a joke — mostly.",
+    "high": "SEASON ARC — MID-SEASON (HIGH): Gloves off. Grievances get said to faces. Alliances flip. Someone repeats something told in confidence. Flirtations either become something real or curdle into resentment. Voices get raised, doors get closed hard — but it stays words, never physical.",
+    "maximum": "SEASON ARC — FINALE (MAXIMUM): Everything explodes. Every held grudge, every secret, every alliance comes due in one night. People say the unsayable and mean it. Someone threatens to move out. It is still a PG-13 show: the damage is emotional, verbal, and total — never physical."
+  },
+  "director_model": "openai/gpt-5.4",
+  "judge_model": "claude-sonnet-4-6",
+  "content_rating": { "max_intensity": "medium" },
+  "provider_env_keys": {
+    "openai": "OPENAI_API_KEY",
+    "anthropic": "ANTHROPIC_API_KEY",
+    "gemini": "GEMINI_API_KEY",
+    "xai": "XAI_API_KEY",
+    "deepseek": "DEEPSEEK_API_KEY",
+    "mistral": "MISTRAL_API_KEY"
+  },
+  "reliability": {
+    "num_retries": 3,
+    "timeout_seconds": 120,
+    "fallbacks": {
+      "openai/gpt-5.4": ["claude-sonnet-4-6"]
+    }
+  }
+}

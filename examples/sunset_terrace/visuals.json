@@ -1,0 +1,15 @@
+{
+  "defaults": {
+    "text_color": "white",
+    "width": 1080,
+    "height": 1920,
+    "fps": 30,
+    "font": ""
+  },
+  "characters": {
+    "jax": {"color": "#2d6a4f"},
+    "mara": {"color": "#8b2d44"},
+    "rio": {"color": "#8a4f2d"},
+    "sloane": {"color": "#1f6f8b"}
+  }
+}

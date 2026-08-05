@@ -1,0 +1,30 @@
+{
+  "provider": "elevenlabs",
+  "defaults": {
+    "model_id": "eleven_multilingual_v2",
+    "output_format": "mp3_44100_128",
+    "gap_seconds": 0.4,
+    "voice_settings": {
+      "stability": 0.5,
+      "similarity_boost": 0.75
+    }
+  },
+  "voices": {
+    "jax": {
+      "voice_id": "iP95p4xoKVk53GoZ742B",
+      "note": "ElevenLabs premade 'Chris' — charming, down-to-earth"
+    },
+    "mara": {
+      "voice_id": "XrExE9yKIg1WjnnlVkGX",
+      "note": "ElevenLabs premade 'Matilda' — knowledgeable, professional"
+    },
+    "rio": {
+      "voice_id": "TX3LPaxmHKxFdv7VOQHJ",
+      "note": "ElevenLabs premade 'Liam' — energetic creator"
+    },
+    "sloane": {
+      "voice_id": "EXAVITQu4vr4xnSDxMaL",
+      "note": "ElevenLabs premade 'Sarah' — mature, confident"
+    }
+  }
+}

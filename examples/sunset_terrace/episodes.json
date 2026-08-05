@@ -1,0 +1,19 @@
+{
+  "premiere": {
+    "name": "Lease Signing",
+    "description": "Four strangers, one rooftop, twelve weeks. Everyone is lovely. Nobody is relaxed.",
+    "intensity": "low",
+    "scenes": [
+      {
+        "scene": "rooftop_welcome",
+        "lines": 8,
+        "plot": "Unpacking spills onto the terrace while the wrong takeout order sits on the table — somebody has to say it, nobody wants to. The room-with-the-view assignment resurfaces very politely. A first toast happens, and everyone chooses their opening move."
+      },
+      {
+        "scene": "confessional",
+        "lines": 4,
+        "plot": "First impressions of the housemates — who they'd trust with a secret by week twelve, who they're already watching, and what they're not saying on the terrace."
+      }
+    ]
+  }
+}

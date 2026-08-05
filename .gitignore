@@ -1,0 +1,40 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+.pytest_cache/
+
+# Virtual environments
+.venv
+
+# Environment variables
+.env
+
+# OS / tool artifacts
+.DS_Store
+.claude/settings.local.json
+
+# Generated scene outputs + telemetry run logs + planner checkpoints
+# (scripts/ is entirely engine-generated, whatever the show slug)
+scripts/
+*.docx
+run_*_calls.jsonl
+
+# ── Private show content — must NOT ship in the public repo ──
+# (interim guards until the public starter data lands; remove entries
+# deliberately, never via `git add -f`)
+data/
+chapters/
+archive/
+CLAUDE.md
+HANDOFF.md
+txt_to_docx.py
+docx_to_md.py
+pdf_to_md.py
+*_concept.*
+*_bible*
+*.pdf
+*-transcript.md

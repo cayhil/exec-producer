@@ -1,0 +1,26 @@
+{
+  "show_name": "NIGHT SIGNAL",
+  "show_slug": "night_signal",
+  "world": "NIGHT SIGNAL is a short-form solo show: one host, one microphone, and the 2-to-5 a.m. shift at KDST, the last independent radio station in a high-desert town. The studio is a fishbowl of warm light in a dark strip mall — the ON AIR sign, coffee going cold on the console, a request line that mostly doesn't ring, and a city asleep except for the people who aren't. Marlow talks to them: night-shift nurses, long-haul drivers, insomniacs, the guy restocking the 24-hour pharmacy. Every episode is one night. The drama is quiet and real: a song choice that says too much, a story that gets away from her, the things a person admits to a microphone at 3 a.m. that they'd never say in daylight.",
+  "intensity_guide": {
+    "low": "SEASON ARC — EARLY NIGHTS (LOW): The shift is routine and she loves the routine — or performs loving it beautifully. Warm, wry, unhurried. Stories stay charming and land softly. Vulnerability exists only as undercurrent: a pause before a song title, a dedication she doesn't explain. NO breakdowns, NO confessions. The drama is in what she almost says.",
+    "medium": "SEASON ARC — DEEP IN THE SEASON (MEDIUM): Cracks in the radio voice. Stories drift closer to her own life before she catches them and steers back. The jokes about the station's new owners have an edge now. She lets a silence run one beat past comfortable before filling it. Off-air, she admits things she immediately walks back.",
+    "high": "SEASON ARC — LATE SEASON (HIGH): The mask between the radio voice and the real voice slips on air. She says true things she can't take back — about the format flip, about who she used to be at this station, about why she really works nights. Raw, unguarded stretches; the professional recovers, but later each time.",
+    "maximum": "SEASON ARC — THE LAST NIGHT (MAXIMUM): Nothing held back. Every carefully rationed truth comes out over one shift — what the station means, what it cost her, who she's actually been talking to all these years. It is still a PG-13 show: the damage is emotional, spoken, and total. The final mic break says everything."
+  },
+  "director_model": "openai/gpt-5.4",
+  "judge_model": "gemini/gemini-2.5-pro",
+  "content_rating": { "max_intensity": "low" },
+  "provider_env_keys": {
+    "openai": "OPENAI_API_KEY",
+    "anthropic": "ANTHROPIC_API_KEY",
+    "gemini": "GEMINI_API_KEY"
+  },
+  "reliability": {
+    "num_retries": 3,
+    "timeout_seconds": 120,
+    "fallbacks": {
+      "openai/gpt-5.4": ["claude-sonnet-4-6"]
+    }
+  }
+}

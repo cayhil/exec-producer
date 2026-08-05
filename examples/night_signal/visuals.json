@@ -1,0 +1,17 @@
+{
+  "defaults": {
+    "text_color": "white",
+    "width": 1080,
+    "height": 1920,
+    "fps": 30,
+    "font": ""
+  },
+  "characters": {
+    "marlow": {"color": "#232946"}
+  },
+  "vlog": {
+    "aspect": "16:9",
+    "price_per_second": 0.40,
+    "max_clips": 12
+  }
+}

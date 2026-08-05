@@ -1,0 +1,12 @@
+{
+  "rooftop_welcome": {
+    "name": "🌇 Rooftop Welcome",
+    "prompt": "First evening on the shared rooftop terrace. Rooms were claimed an hour ago (nobody has re-opened the topic — yet), the takeout order just arrived wrong, and the city is going gold behind the string lights. Four strangers, one long table, twelve weeks ahead.",
+    "mood": "curious, polite, testing each other, good vibes with undercurrent"
+  },
+  "confessional": {
+    "name": "🎙️ Confessional Cam",
+    "prompt": "Alone with the confession camera in the stairwell nook — a stool, a ring light, and nobody to perform for except the audience.",
+    "mood": "reflective, honest, first impressions"
+  }
+}

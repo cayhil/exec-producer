@@ -1,0 +1,19 @@
+{
+  "graveyard": {
+    "name": "The Graveyard Shift",
+    "description": "One night, one host, one microphone. Nothing happens, which is to say: everything does.",
+    "intensity": "low",
+    "scenes": [
+      {
+        "scene": "sign_on",
+        "lines": 6,
+        "plot": "Opening mic break of the shift. The transmitter hiccups mid-sentence and she covers live without missing a beat. The request line blinks once and goes dark before she can reach it. She sorts the evening guy's dedication slips, reads one aloud, and sends the first song out to whoever is awake to hear it."
+      },
+      {
+        "scene": "off_air_confessional",
+        "lines": 3,
+        "plot": "The diary cam. What she misses about daytime radio, why she pretends she doesn't, and the one thing about the overnight shift she would never give up — the song runs out before she finishes the thought."
+      }
+    ]
+  }
+}
