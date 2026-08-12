@@ -81,8 +81,13 @@ Anything that bills is gated before the first call, not after:
   once text generation has tripped it — but a run that is mostly or entirely
   video can exceed the cap without the cap ever noticing. For those runs the
   real controls are `vlog.max_clips`, `--dry-run`, and `--clips-dir`.
-- It is per process. Resuming an interrupted `--planner` run with `--thread`
-  starts a fresh budget.
+- It is per process, and one interactive shell session is one process — so
+  scenes in a session share a budget rather than each getting a fresh one.
+- **A budget stop ends a `--planner` run for good.** The graph exits
+  normally, so its checkpoint records the run as finished and `--thread`
+  refuses to resume it; you start a new thread and re-pay for turns already
+  generated. The CLI warns about this at the start of any capped planner
+  run. Resuming a *different* thread also starts a fresh budget.
 
 ### Untrusted show directories
 

@@ -28,6 +28,7 @@ from .config import (CAST, CONFIG_MANIFEST, DATA_DIR, DIRECTOR_MODEL, EPISODES,
                      JUDGE_MODEL, MAX_INTENSITY, MAX_RUN_USD,
                      PROVIDER_ENV_KEYS, SCENES, SHOW_NAME)
 from .llm import api_key_set, provider_for_model
+from .redact import redact
 
 PASS, WARN, FAIL, ERROR = "pass", "warn", "fail", "error"
 
@@ -117,7 +118,7 @@ def check_show():
     # Guardrails silently change what a run produces (a capped intensity, a
     # run that stops early), so a user diagnosing "why did it stop?" should
     # find the answer here rather than by reading world.json.
-    if MAX_RUN_USD:
+    if MAX_RUN_USD is not None:
         details.append(f"budget.max_run_usd: generation stops at ${MAX_RUN_USD:.2f}")
     if MAX_INTENSITY:
         details.append(f"content_rating.max_intensity: capped at {MAX_INTENSITY}")
@@ -216,12 +217,14 @@ def check_stage(name, preflight):
         with contextlib.redirect_stdout(chatter):
             problems = list(preflight(list(CAST.keys())))
     except Exception as e:
+        # str(e) is redacted: this report is the artifact we tell people to
+        # paste into a bug report, and a preflight can surface provider text.
         # Advisories printed before the raise are read here too — vlog
         # prints them from inside a per-cast loop, so a raise on a later
         # iteration would otherwise discard the earlier ones.
         return Check(id=f"stage:{name}", status=ERROR,
                      summary=f"{flag} could not be checked ({type(e).__name__})",
-                     details=[str(e)] + _lines(chatter))
+                     details=[redact(str(e))] + _lines(chatter))
     advisories = _lines(chatter)
     if not problems:
         return Check(id=f"stage:{name}", status=PASS, summary=f"{flag} ready",
@@ -243,7 +246,7 @@ def _run_core(check_id, fn):
     except Exception as e:
         return Check(id=check_id, status=ERROR,
                      summary=f"check could not run ({type(e).__name__})",
-                     details=[str(e)],
+                     details=[redact(str(e))],
                      remedy="this usually means a malformed value in "
                             "world.json — see CREATING_A_SHOW.md")
 

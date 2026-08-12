@@ -146,6 +146,12 @@ def test_every_optional_render_path_has_a_registered_stage_check(monkeypatch):
     # here would silently be undiagnosable. Runs the REAL preflights, so it
     # asserts only on shape — the verdict depends on the host.
     monkeypatch.undo()
+    # Stub the one thing in the real preflights that shells out: three of
+    # them probe `ffmpeg -encoders`. The registry wiring is what's under
+    # test, and the suite has to run identically on a host without ffmpeg.
+    from exec_producer import video, vlog
+    monkeypatch.setattr(video, "pick_h264_encoder", lambda *a, **k: "libx264")
+    monkeypatch.setattr(vlog, "pick_h264_encoder", lambda *a, **k: "libx264")
     assert set(doctor.STAGE_PREFLIGHTS) == {"audio", "video", "veo", "vlog", "planner"}
     for name, preflight in doctor.STAGE_PREFLIGHTS.items():
         check = doctor.check_stage(name, preflight)
@@ -169,6 +175,20 @@ def test_advisories_a_preflight_prints_are_folded_into_its_check(monkeypatch):
     check = by_id(doctor.run_checks(), "stage:vlog")
     assert check.status == doctor.PASS
     assert any("reference_images" in d for d in check.details)
+
+
+def test_an_exception_message_in_the_report_is_redacted(monkeypatch):
+    # `doctor --json` is the artifact we tell people to paste into a bug
+    # report, so a provider exception's text must not ride along raw.
+    secret = "sk-abcdefghijklmnopqrstuvwxyz"
+
+    def boom(cast_ids):
+        raise RuntimeError(f"ElevenLabs rejected {secret}")
+
+    monkeypatch.setattr(doctor, "STAGE_PREFLIGHTS", {"audio": boom})
+    checks = doctor.run_checks()
+    assert secret not in json.dumps(doctor.to_json(checks))
+    assert secret not in doctor.format_human(checks)
 
 
 def test_a_stage_preflight_that_raises_does_not_abort_the_whole_report(monkeypatch):

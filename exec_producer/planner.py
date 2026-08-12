@@ -173,6 +173,12 @@ def _plan_note(plan, turn_index, total_lines):
 
 
 def direct_turn(state):
+    # Budget gate. The graph's routing check happens after `speak`, so a
+    # budget already gone at turn 0 still paid for a director call AND a
+    # character call before anything noticed. The classic loop gates at the
+    # top of its turn; this makes the graph match.
+    if telemetry.spend_exhausted():
+        return {}
     cfg = state["scene_queue"][state["scene_index"]]
     scene = engine.SCENES[cfg["scene_id"]]
     plan = state.get("plan") or []

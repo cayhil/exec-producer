@@ -6,11 +6,12 @@ import random
 import sys
 from pathlib import Path
 
-from .config import (AUDIT, CAST, DIRECTOR_MODEL, EPISODES, PROVIDER_ENV_KEYS,
-                     SCENES, SHOW_NAME)
+from .config import (AUDIT, CAST, DIRECTOR_MODEL, EPISODES, MAX_RUN_USD,
+                     PROVIDER_ENV_KEYS, SCENES, SHOW_NAME)
 from .engine import RunOptions, check_api_keys, run_episode, run_scene
 from .errors import ConfigError, ThreadResumeError
 from .llm import api_key_set, provider_for_model
+from . import telemetry
 from .telemetry import setup_logging, start_run
 
 
@@ -23,6 +24,24 @@ def director_key_or_die():
         need = env_key or f"a provider_env_keys entry for '{provider}'"
         print(f"❌ Director model {DIRECTOR_MODEL} needs {need} set in .env")
         sys.exit(1)
+
+
+def session_budget_spent():
+    """True when the interactive session's budget is gone — with a notice,
+    every time, not once.
+
+    The shell runs many scenes inside ONE process, and the budget is per
+    process, so a session shares one cap: N scenes can't quietly spend N
+    times it. Once it's gone every further scene would generate nothing, so
+    the shell declines to start one rather than printing a banner, producing
+    no dialogue, and saving an empty .txt/.json for it."""
+    if not telemetry.spend_exhausted():
+        return False
+    summary = telemetry.get_run_log().summary()
+    print(f"\n  💸 Session budget spent — ${summary['total_cost_usd']:.4f} across "
+          f"{summary['calls']} calls. Scenes in one shell session share one budget.")
+    print("     Raise budget.max_run_usd in world.json, or restart for a fresh session.")
+    return True
 
 
 def interactive_mode():
@@ -95,10 +114,11 @@ def interactive_mode():
     inp = input("Generate production prompts for Gemini/Veo 3? (y/n, default n): ").strip()
     produce = inp.lower() == "y"
 
-    run_scene(scene_id, cast_ids,
-              RunOptions(num_lines=num_lines, produce=produce, intensity=intensity))
+    if not session_budget_spent():
+        run_scene(scene_id, cast_ids,
+                  RunOptions(num_lines=num_lines, produce=produce, intensity=intensity))
 
-    while True:
+    while not session_budget_spent():
         again = input("\n🎬 Another scene? (y/n): ").strip().lower()
         if again != "y":
             print("\n👋 Season wrap. ✌️\n")
@@ -140,6 +160,27 @@ def media_preflight_or_die(cast_ids, audio=False, video=False, render_mode="tts"
         for p in problems:
             print(f"❌ {p}")
         sys.exit(1)
+
+
+def warn_if_budget_blocks_resume(planner):
+    """Say up front that a budget stop ends a planned run for good.
+
+    KNOWN LIMITATION, deliberately surfaced rather than silently endured:
+    when the cap stops a --planner run, the graph reaches END normally, so
+    the checkpoint records the run as *finished* and --thread refuses to
+    resume it. Raising the cap doesn't help — the user starts a new thread
+    and re-pays for turns they already bought. Fixing that properly means
+    pausing the graph instead of ending it, which is its own piece of work;
+    until then the least we owe them is not to spring it after the fact.
+    Classic runs have no checkpoints to lose, so they get no warning."""
+    # `is None`, not truthiness: a cap of 0 is the strictest setting
+    # there is, and it must not be the one that skips the warning.
+    if not planner or MAX_RUN_USD is None:
+        return
+    print(f"\n  ⚠️  Budget cap (${MAX_RUN_USD:.2f}) is set and this is a --planner run.")
+    print("     If the cap stops the run, its thread is marked complete and "
+          "--thread can't resume it —")
+    print("     you'd start a new thread and re-pay for the turns already generated.")
 
 
 def planner_preflight_or_die():
@@ -442,6 +483,7 @@ def main():
                           render_mode=args.render_mode)
         if args.planner:
             planner_preflight_or_die()
+            warn_if_budget_blocks_resume(args.planner)
             from .planner import run_episode_planned
             try:
                 run_episode_planned(args.episode, available, opts, thread_id=args.thread)
@@ -472,6 +514,7 @@ def main():
                           render_mode=args.render_mode)
         if args.planner:
             planner_preflight_or_die()
+            warn_if_budget_blocks_resume(args.planner)
             from .planner import run_scene_planned
             try:
                 run_scene_planned(args.scene, available, opts, thread_id=args.thread)

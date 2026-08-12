@@ -969,6 +969,13 @@ def run_episode(episode_id, cast_ids, opts=None):
         conversation, director_notes = run_scene(
             scene_id, scene_cast, scene_opts, sessions=scene_sessions,
         )
+        if not conversation:
+            # The budget can trip during this scene's casting call — after
+            # the per-scene gate above, before its first line. Keeping the
+            # zero-line result would put an empty scene in the saved episode
+            # and, with --eval, bill the judge to score a blank script.
+            print("  💸 No lines generated for this scene — dropping it from the episode")
+            break
         all_conversations.append({
             "scene_id": scene_id,
             "scene": scene,

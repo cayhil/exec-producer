@@ -295,6 +295,12 @@ Two limits worth knowing before you rely on it:
 non-numeric or negative value is rejected when the show loads, rather than at the first turn
 boundary after the run has already billed.
 
+Scope notes: an interactive shell session is one process, so its scenes share one budget — once
+spent, the shell says so and stops offering new scenes rather than producing empty ones. And a
+budget stop ends a `--planner` run permanently: the graph exits normally, so its checkpoint reads
+as finished and `--thread` won't resume it. The CLI warns before starting any capped planner run;
+making that resumable is tracked as future work.
+
 ### Secret redaction — logs you can paste into an issue
 
 Everything reaching the package logger passes through a redacting formatter that masks
