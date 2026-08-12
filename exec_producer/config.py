@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import re
+import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -31,6 +32,17 @@ REQUIRED_FILES = [
 ]
 
 
+def announce_data_dir_fallback(starter):
+    """Tell the user which show got picked, on STDERR.
+
+    Stderr, not stdout, because this fires at import — before any command
+    has run — and stdout is a machine-readable payload for some of them.
+    `doctor --json | jq` on a fresh clone (no data/, so this always fires)
+    was getting a non-JSON first line."""
+    print(f"ℹ️  No data/ directory — using the starter show at {starter}",
+          file=sys.stderr)
+
+
 def resolve_data_dir():
     """--data-dir/env var wins; otherwise the private data/ in the repo
     root; otherwise the committed starter show, so a fresh clone runs
@@ -43,7 +55,7 @@ def resolve_data_dir():
         return private
     starter = _REPO_ROOT / "examples" / "sunset_terrace"
     if starter.is_dir():
-        print(f"ℹ️  No data/ directory — using the starter show at {starter}")
+        announce_data_dir_fallback(starter)
         return starter
     return private  # validate_data_dir turns this into the legible error
 
@@ -117,6 +129,57 @@ RELIABILITY = {**_DEFAULT_RELIABILITY, **_world_config.get("reliability", {})}
 # every scene/episode intensity is capped at that level regardless of what
 # the episode config or CLI asks for — a guardrail for public/demo runs.
 MAX_INTENSITY = _world_config.get("content_rating", {}).get("max_intensity")
+
+
+def validate_budget(world_config):
+    """Problems with the optional budget block, in the list-them-all style.
+
+    Validated at LOAD, unlike content_rating (which degrades harmlessly on a
+    bad value), because every failure mode here costs money: a string cap
+    passes a truthiness check and then raises TypeError at the first turn
+    boundary — i.e. after the run has already billed — and a negative cap
+    silently stops every run before its first line."""
+    budget = world_config.get("budget", {})
+    if not isinstance(budget, dict):
+        return ["world.json 'budget' must be an object, e.g. "
+                '{"budget": {"max_run_usd": 2.50}}']
+    if "max_run_usd" not in budget:
+        return []
+    value = budget["max_run_usd"]
+    # bool is an int subclass, and `true` in JSON is a plausible typo for a
+    # value someone meant to be numeric.
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return [f"world.json budget.max_run_usd must be a number (got "
+                f"{type(value).__name__} {value!r}) — e.g. 2.50, or remove "
+                "the key for no cap"]
+    if value < 0:
+        return [f"world.json budget.max_run_usd must be >= 0 (got {value}) — "
+                "use 0 to forbid all spend, or remove the key for no cap"]
+    return []
+
+
+def read_max_run_usd(world_config):
+    """The configured spend cap, or None when there is none.
+
+    Returns 0 as 0, not as None: someone writing `"max_run_usd": 0` means
+    "this run must not spend", and a truthiness test would hand them an
+    uncapped run instead — the exact inversion of their intent."""
+    value = world_config.get("budget", {}).get("max_run_usd")
+    return None if value is None else value
+
+
+# Budget gate, the money-shaped sibling of content_rating: when world.json
+# sets budget.max_run_usd, the generation loops AND the media stages stop
+# once this run's recorded spend reaches it, saving what was already
+# produced. Absent (the default) = no cap. It is a stop-line rather than a
+# hard ceiling — a call's cost isn't knowable until it returns — so a run
+# can overshoot by the calls already in flight for the current unit of work.
+_budget_problems = validate_budget(_world_config)
+if _budget_problems:
+    raise ConfigError(
+        f"show directory {DATA_DIR} doesn't satisfy the data contract:\n"
+        + "\n".join(f"     - {p}" for p in _budget_problems))
+MAX_RUN_USD = read_max_run_usd(_world_config)
 
 CAST = _load_json("cast.json")
 SCENES = _load_json("scenes.json")

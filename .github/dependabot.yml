@@ -1,0 +1,32 @@
+# Keeps the SHA-pinned actions current. Pinning by SHA is the right call
+# for supply-chain safety, but it freezes the action at whatever it was the
+# day it was pinned — including its bundled integrity-checksum tables, which
+# is how a "correctly pinned" setup-uv ended up downloading uv with no
+# checksum validation at all. Dependabot rewrites both the SHA and the
+# version comment, which is the only thing that keeps a pin honest.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    # Don't propose a release the day it lands: a compromised or yanked
+    # version is usually caught within days, and nothing here is urgent
+    # enough to want the bleeding edge.
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: "chore(ci)"
+
+  # Security-only for Python: a single-maintainer repo doesn't want a PR
+  # every time litellm ships a patch, but it does want to hear about a CVE
+  # in the ~90 transitive packages behind it.
+  - package-ecosystem: uv
+    directory: /
+    schedule:
+      interval: monthly
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: "chore(deps)"
+    open-pull-requests-limit: 3

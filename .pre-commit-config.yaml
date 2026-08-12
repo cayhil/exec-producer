@@ -1,0 +1,38 @@
+# Pre-commit hooks. Optional for contributors, but the two secret/large-file
+# guards are worth the install on a repo that keeps private show content in a
+# gitignored data/ next to the public tree.
+#
+#   uv tool install pre-commit
+#   pre-commit install
+#   pre-commit run --all-files
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+        # Prompt files are whitespace-sensitive: they're pasted into model
+        # context verbatim, and their sha256 goes in the audit manifest.
+        exclude: '(^|/)prompts/.*\.txt$'
+      - id: end-of-file-fixer
+        exclude: '(^|/)prompts/.*\.txt$'
+      - id: check-json
+      - id: check-yaml
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: [--maxkb=500]
+      # The repo holds API keys for seven providers in a gitignored .env —
+      # the failure mode this guards against is one `git add -f` away.
+      - id: detect-private-key
+
+  # Workflow linting + workflow-specific security (unpinned actions,
+  # injectable ${{ }} expressions). Cheap, and CI runs with a token.
+  - repo: https://github.com/rhysd/actionlint
+    rev: v1.7.10
+    hooks:
+      - id: actionlint
+
+  - repo: https://github.com/zizmorcore/zizmor-pre-commit
+    rev: v1.22.0
+    hooks:
+      - id: zizmor

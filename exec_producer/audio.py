@@ -198,6 +198,12 @@ def render_scene_audio(conversation, out_prefix, voices=None, backend=None):
     log = telemetry.get_run_log()
     line_files = []
     for i, entry in enumerate(conversation):
+        # Budget gate. TTS is per-line and unbounded, and it runs AFTER the
+        # generation loop — without this, a run that stopped at its cap would
+        # go on to bill ElevenLabs for every line it had already produced.
+        if telemetry.spend_exhausted():
+            print(f"  💸 Spend cap reached — {len(conversation) - i} line(s) left unvoiced")
+            break
         text = spoken_text(entry["text"])
         voice = voice_map.get(entry["id"])
         if not text or not voice:

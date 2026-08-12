@@ -1,6 +1,22 @@
 ---
 name: showrunner
 description: Turn an episode idea into rendered scenes with zero generation-API spend. Use when the user describes an episode or scene idea for their show and wants this session to WRITE the scripts (on the user's subscription), then have the engine render them — .txt, --eval, --audio, --video. Also use when the user says "write an episode", "script a scene", or "showrunner".
+version: 1.0.0
+license: MIT
+platforms: [linux, macos, windows]
+prerequisites:
+  commands: [uv]
+  # The engine itself needs no API key on this path — --from-script makes
+  # zero generation calls. The optional stages this skill can invoke do:
+  #   --eval   judge model key (world.json judge_model)
+  #   --audio  ELEVENLABS_API_KEY + ffmpeg + `uv sync --extra audio`
+  #   --video  `uv sync --extra video`
+  # Run `exec-producer doctor` to see which of these are ready.
+  optional_env_vars: [ELEVENLABS_API_KEY]
+metadata:
+  exec-producer:
+    writes: scene .json (SCENE_SCHEMA 1 — see CREATING_A_SHOW.md)
+    spend: none for script generation; downstream stages bill per their flags
 ---
 
 # Showrunner: write scripts in-session, render with the engine
@@ -95,6 +111,7 @@ the render path.
 
 ```json
 {
+  "scene_schema": "1",
   "scene_id": "kitchen_fight",
   "scene": {
     "name": "🍳 Kitchen Fight",
@@ -118,6 +135,10 @@ the render path.
 
 Field rules:
 
+- `scene_schema` — optional; the contract version this file is written against, currently
+  `"1"`. Omit it and the engine reads the file as the current version, so every scene
+  written before versioning existed still renders. A version the engine can't read is
+  rejected at the boundary rather than misinterpreted.
 - `scene_id` — optional; filename-safe; defaults to the input filename stem. Sets the
   output prefix `scripts/<show_slug>_<scene_id>_<ts>_<pid>`.
 - `scene.name` — required, non-empty. `prompt`/`mood` default to `""`. A name containing

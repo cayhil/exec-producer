@@ -213,6 +213,52 @@ def test_cli_scene_named_render_is_not_sugar(monkeypatch, capsys):
     assert "Unknown scene: render" in capsys.readouterr().out
 
 
+# ── contract versioning ──────────────────────────────────
+
+def test_a_file_without_a_schema_version_is_read_as_the_current_one(tmp_path):
+    # Every scene .json written before versioning existed — including the
+    # showrunner skill's output — must keep rendering.
+    assert "scene_schema" not in VALID
+    data = render.load_external_scene(write_scene(tmp_path, VALID))
+    assert data["scene_id"] == "my_scene"
+
+
+def test_the_current_schema_version_is_accepted(tmp_path):
+    payload = {**VALID, "scene_schema": render.SCENE_SCHEMA}
+    assert render.load_external_scene(write_scene(tmp_path, payload))
+
+
+def test_a_schema_version_this_engine_cannot_read_is_rejected(tmp_path):
+    # The point of the field: an older engine must refuse a newer file
+    # rather than silently misread it.
+    payload = {**VALID, "scene_schema": "2"}
+    with pytest.raises(ConfigError, match="scene_schema"):
+        render.load_external_scene(write_scene(tmp_path, payload))
+
+
+def test_an_unreadable_schema_version_is_reported_with_the_other_problems(tmp_path):
+    # The boundary's contract is "every problem at once", not "first only".
+    payload = {**VALID, "scene_schema": "2", "intensity": "nonsense"}
+    with pytest.raises(ConfigError) as err:
+        render.load_external_scene(write_scene(tmp_path, payload))
+    assert "scene_schema" in str(err.value) and "intensity" in str(err.value)
+
+
+def test_a_generated_scene_round_trips_back_through_the_render_path(tmp_path, monkeypatch):
+    # The saved shape IS the render input. A version stamp the engine writes
+    # but can't read back would break the documented workflow.
+    monkeypatch.chdir(tmp_path)
+    source = render.load_external_scene(write_scene(tmp_path, VALID))
+    engine.save_scene_outputs(
+        source["scene_id"], source["scene"], source["conversation"],
+        source["director_notes"], source["cast_ids"],
+        engine.RunOptions(), source["intensity"])
+    saved = next((tmp_path / "scripts").glob("test_show_my_scene_*.json"))
+    payload = json.loads(saved.read_text())
+    assert payload["scene_schema"] == render.SCENE_SCHEMA
+    assert render.load_external_scene(saved)["scene_id"] == "my_scene"
+
+
 def test_load_rejects_non_string_display_fields(tmp_path):
     payload = {**VALID, "conversation": [
         {"id": "alpha", "text": "hi", "name": None, "direction": 7}]}

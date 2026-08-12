@@ -24,6 +24,11 @@ from . import engine
 # is unknowable here (precedent: TTS cost is recorded as unknown too).
 EXTERNAL_AUDIT = {"generator": "external", "generation_cost": "unknown"}
 
+# The scene-file contract version this module reads. Defined in engine.py
+# (the module that writes the shape) and re-exported here, where the
+# contract is validated and documented.
+SCENE_SCHEMA = engine.SCENE_SCHEMA
+
 
 def _safe_slug(text, fallback="external"):
     slug = re.sub(r"[^a-z0-9_-]+", "_", str(text).lower()).strip("_")
@@ -50,6 +55,16 @@ def load_external_scene(path):
             "render episode scenes individually")
 
     problems = []
+
+    # Checked first, reported with everything else: a file this engine can't
+    # read is worth saying plainly, but a caller fixing one problem at a
+    # time is exactly what the all-at-once contract exists to avoid.
+    schema = str(data.get("scene_schema", SCENE_SCHEMA))
+    if schema != SCENE_SCHEMA:
+        problems.append(
+            f"scene_schema {schema!r} is not readable by this engine "
+            f"(reads scene_schema {SCENE_SCHEMA!r}) — upgrade exec-producer, "
+            "or regenerate the scene against this version")
 
     scene = data.get("scene")
     if not isinstance(scene, dict) or not str(scene.get("name", "")).strip():

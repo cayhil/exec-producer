@@ -37,7 +37,7 @@ import time
 from datetime import datetime
 from typing import TypedDict
 
-from . import engine
+from . import engine, telemetry
 from .config import load_planner_prompt
 from .engine import RunOptions
 from .errors import ThreadResumeError
@@ -119,6 +119,12 @@ def plan_scene(state):
     """One planner call before any dialogue: the scene's turn-by-turn arc.
     Degrades to an empty plan — the directors then behave exactly as the
     classic, plan-less loop."""
+    # Budget gate. The graph's first routing decision happens two nodes
+    # later, so without a check here a capped run still pays for an arc it
+    # will never use — and this is the most expensive single call in the
+    # planner (max_tokens=2000, up to three attempts).
+    if telemetry.spend_exhausted():
+        return {"plan": []}
     cfg = state["scene_queue"][state["scene_index"]]
     scene = engine.SCENES[cfg["scene_id"]]
     lines = cfg["lines"]
@@ -243,11 +249,18 @@ def wrap_scene(state):
 
 
 def route_after_speak(state):
+    # The budget gate reaches the graph through its routing, which is this
+    # loop's equivalent of the classic loop's between-turn check: wrapping
+    # the scene runs every downstream save exactly as a normal wrap does.
+    if telemetry.spend_exhausted():
+        return "wrap"
     cfg = state["scene_queue"][state["scene_index"]]
     return "continue" if state["turn_index"] < cfg["lines"] else "wrap"
 
 
 def route_after_wrap(state):
+    if telemetry.spend_exhausted():
+        return "end"
     return "next_scene" if state["scene_index"] < len(state["scene_queue"]) else "end"
 
 

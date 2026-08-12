@@ -374,6 +374,12 @@ def render_veo_video(beats, out_prefix, client=None, poll_seconds=15, timeout_se
     log = telemetry.get_run_log()
     clip_paths = []
     for i, beat in enumerate(beats):
+        # Budget gate. Veo bills per second of footage and dominates every
+        # other cost in the pipeline, so this is the single most valuable
+        # place in the codebase to stop.
+        if telemetry.spend_exhausted():
+            print(f"  💸 Spend cap reached — {len(beats) - i} beat(s) left ungenerated")
+            break
         start_time = time.time()
         try:
             clip_bytes = _generate_veo_clip(client, model, beat["veo3_video_prompt"],

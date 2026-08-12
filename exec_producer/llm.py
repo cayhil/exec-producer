@@ -26,6 +26,18 @@ def api_key_set(env_key):
     return bool(value) and not value.startswith("#")
 
 
+def provider_for_model(model):
+    """Provider name for a LiteLLM model string. Bare names (no prefix) are
+    resolved through LiteLLM's registry — defaulting to openai would demand
+    the wrong key for a bare Anthropic model."""
+    if "/" in model:
+        return model.split("/", 1)[0]
+    try:
+        return litellm.get_llm_provider(model)[1]
+    except Exception:
+        return "openai"
+
+
 def parse_json_response(raw):
     """Parse a model's JSON reply, tolerating markdown code fences.
 

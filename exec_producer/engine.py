@@ -34,10 +34,25 @@ from .config import (
 )
 from .llm import (api_key_set, call_director, call_model, call_model_simple,
                   parse_json_response)
+from .redact import redact
 from . import telemetry
 from .evaluate import evaluate_scene, summarize_scorecard
 
 INTENSITY_ORDER = ["low", "medium", "high", "maximum"]
+
+# Version of the saved-scene file shape, written into every scene .json and
+# checked when one is read back through --from-script (render.py).
+#
+# It lives here because this module writes the shape, but it is a PUBLIC
+# contract, not an internal detail: third parties author these files (the
+# showrunner skill, any subscription CLI, hand-written scripts), so the
+# engine has to be able to say "I can't read this" instead of misreading a
+# future shape. Bump it only when a change would make an older engine read
+# a newer file WRONG — adding an optional key doesn't qualify, since the
+# loader passes unknown keys through untouched. A file with no stamp is
+# read as the current version, so every scene .json written before this
+# existed stays valid.
+SCENE_SCHEMA = "1"
 
 
 @dataclass
@@ -619,7 +634,7 @@ def render_video_stage(opts, scene, conversation, director_notes, cast_ids,
             return render_vlog_video(conversation, scene, prefix,
                                      clips_dir=opts.clips_dir), None
         except Exception as e:
-            print(f"  ⚠️  Vlog rendering failed ({type(e).__name__}: {e}) — earlier outputs still saved")
+            print_vlog_failure(e)
             return None, None
     if opts.render_mode == "veo":
         production = generate_production_prompts(scene, conversation, director_notes, cast_ids)
@@ -673,6 +688,11 @@ def run_scene(scene_id, cast_ids, opts=None, sessions=None):
     print()
 
     for _ in range(opts.num_lines):
+        # Budget gate, checked between turns so a capped run keeps every
+        # line it finished instead of losing the scene to an abort.
+        if telemetry.spend_exhausted():
+            break
+
         # Step 1: Director decides who speaks and how
         print(f"  🎬 Director is reading the room...", end="", flush=True)
         director_note = get_director_choice(scene, conversation, cast_ids, last_speaker, intensity, plot)
@@ -748,6 +768,18 @@ def run_scene(scene_id, cast_ids, opts=None, sessions=None):
     return conversation, director_notes
 
 
+def print_vlog_failure(e):
+    """The one failure notice in the package that shows an exception's
+    MESSAGE, not just its type.
+
+    It earns the exception because it wraps the only stage talking to two
+    paid providers — "which of them rejected me?" is the entire diagnostic.
+    But the string is provider-controlled and this is a print(), which the
+    logger's RedactingFormatter never sees, so it is redacted here."""
+    print(f"  ⚠️  Vlog rendering failed ({type(e).__name__}: "
+          f"{redact(str(e))}) — earlier outputs still saved")
+
+
 def save_scene_outputs(scene_id, scene, conversation, director_notes, cast_ids,
                        opts, intensity, extra_json=None, standalone=True,
                        audit_extra=None):
@@ -813,6 +845,9 @@ def save_scene_outputs(scene_id, scene, conversation, director_notes, cast_ids,
         json_filename = f"{prefix}.json"
         with open(json_filename, "w") as f:
             json.dump({
+                # Version of this file's shape — the render path reads it
+                # back and refuses anything it can't interpret.
+                "scene_schema": SCENE_SCHEMA,
                 "scene_id": scene_id,  # round-trip seam: --from-script reuses it
                 "scene": scene,
                 **({"audio_track": audio_track} if audio_track else {}),
@@ -883,6 +918,12 @@ def run_episode(episode_id, cast_ids, opts=None):
     print("=" * 60)
 
     for i, scene_config in enumerate(episode["scenes"]):
+        # Budget gate. Checked per scene as well as per turn: an episode's
+        # casting call bills before its first line, so a cap reached at the
+        # end of scene 2 must not start scene 3 at all.
+        if telemetry.spend_exhausted():
+            break
+
         scene_id = scene_config["scene"]
         lines = scene_config["lines"]
         scene = SCENES[scene_id]

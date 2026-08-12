@@ -10,27 +10,14 @@ from .config import (AUDIT, CAST, DIRECTOR_MODEL, EPISODES, PROVIDER_ENV_KEYS,
                      SCENES, SHOW_NAME)
 from .engine import RunOptions, check_api_keys, run_episode, run_scene
 from .errors import ConfigError, ThreadResumeError
-from .llm import api_key_set
+from .llm import api_key_set, provider_for_model
 from .telemetry import setup_logging, start_run
-
-
-def _director_provider():
-    """Provider for the director model string. Bare names (no prefix) are
-    resolved through LiteLLM's registry — defaulting to openai would demand
-    the wrong key for a bare Anthropic model."""
-    if "/" in DIRECTOR_MODEL:
-        return DIRECTOR_MODEL.split("/", 1)[0]
-    try:
-        import litellm
-        return litellm.get_llm_provider(DIRECTOR_MODEL)[1]
-    except Exception:
-        return "openai"
 
 
 def director_key_or_die():
     """The director is the first spend of every run — fail before it, not
     after N degraded random-pick 'directing' calls."""
-    provider = _director_provider()
+    provider = provider_for_model(DIRECTOR_MODEL)
     env_key = PROVIDER_ENV_KEYS.get(provider, "")
     if not env_key or not api_key_set(env_key):
         need = env_key or f"a provider_env_keys entry for '{provider}'"
@@ -201,7 +188,16 @@ def resolve_cast(cast_arg):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="EXECUTIVE PRODUCER — Autonomous Reality Show Engine")
+    # allow_abbrev=False is load-bearing, not tidiness. bootstrap.py matches
+    # the exact string "--data-dir" to set EXEC_PRODUCER_DATA_DIR before
+    # config imports; argparse's default prefix matching accepted
+    # `--data-di X`, which argparse bound happily while bootstrap ignored it
+    # — so the command ran the DEFAULT show while appearing to select X.
+    # Wrong show, real spend. It also keeps the bare-token `render`/`doctor`
+    # rewrite below honest, since value_flags lists only full spellings.
+    parser = argparse.ArgumentParser(
+        description="EXECUTIVE PRODUCER — Autonomous Reality Show Engine",
+        allow_abbrev=False)
     parser.add_argument("--scene", type=str)
     parser.add_argument("--cast", type=str)
     parser.add_argument("--lines", type=int, default=15)
@@ -267,21 +263,45 @@ def main():
                              "no director key (except --produce, which bills the director "
                              "model). Intensity comes from the file. "
                              "Sugar: exec-producer render <file>")
+    parser.add_argument("--doctor", action="store_true",
+                        help="Health check: show contract, API keys, and every "
+                             "optional stage (--audio/--video/--render-mode "
+                             "veo|vlog/--planner), without starting a run. "
+                             "Exits 0 healthy, 1 if a core check failed, 2 if a "
+                             "check couldn't run. Sugar: exec-producer doctor")
+    parser.add_argument("--json", action="store_true",
+                        help="With doctor: emit the report as JSON instead of "
+                             "human-readable text")
 
-    # `exec-producer render <scene.json>` is sugar for --from-script. The
-    # token may follow leading flags (--data-dir X render f.json) — it is
-    # only skipped when it's the VALUE of a value-taking option, so
-    # `--scene render` still means a scene literally named "render".
+    # `exec-producer render <scene.json>` and `exec-producer doctor` are
+    # sugar for their flags. The token may follow leading flags (--data-dir X
+    # render f.json) — it is only skipped when it's the VALUE of a
+    # value-taking option, so `--scene render` still means a scene literally
+    # named "render".
     value_flags = {"--scene", "--cast", "--lines", "--episode", "--intensity",
                    "--render-mode", "--thread", "--data-dir", "--from-script",
                    "--clips-dir"}
     argv = sys.argv[1:]
     for i, tok in enumerate(argv):
-        if tok == "render" and (i == 0 or argv[i - 1] not in value_flags):
-            argv = argv[:i] + ["--from-script"] + argv[i + 1:]
+        if tok in ("render", "doctor") and (i == 0 or argv[i - 1] not in value_flags):
+            replacement = "--from-script" if tok == "render" else "--doctor"
+            argv = argv[:i] + [replacement] + argv[i + 1:]
             break
 
     args = parser.parse_args(argv)
+    if args.json and not args.doctor:
+        print("❌ --json is part of the doctor report — use with: exec-producer doctor --json")
+        sys.exit(1)
+    if args.doctor:
+        # Before every gate and every flag-compatibility check: the whole
+        # point is to run on a broken install, so it must not need a
+        # working one. Makes no LLM calls, so no run log either.
+        from . import doctor as doctor_module
+        setup_logging(debug=args.debug)
+        checks = doctor_module.run_checks()
+        print(json.dumps(doctor_module.to_json(checks), indent=2) if args.json
+              else doctor_module.format_human(checks))
+        sys.exit(doctor_module.exit_code(checks))
     if args.lines < 1:
         # The classic loop would save an empty script; the planner graph
         # would still direct-and-bill one line (plan → direct → speak runs
