@@ -42,7 +42,7 @@ Feels like useful information."               for a week and then you'd never le
 - **Media pipeline with explicit tradeoffs.** Persistent ElevenLabs voices + Pillow-composed video
   by default; Veo-native generation as a gated, priced-in opt-in. Text is drawn by Pillow
   specifically so minimal ffmpeg builds (no drawtext/libass) still work.
-- **~230 unit tests, zero network.** All LLM/TTS/ffmpeg calls mocked; the suite runs in ~3 seconds.
+- **Zero-network test suite.** Every LLM/TTS/ffmpeg call is mocked; it runs in seconds and needs no API keys.
 
 ## 60-second quickstart
 
@@ -50,6 +50,7 @@ Feels like useful information."               for a week and then you'd never le
 git clone <repo> && cd exec-producer
 uv sync                              # engine only; media/planner extras are opt-in
 cp .env.example .env                 # 2+ provider keys, incl. the director's (starter: OpenAI)
+uv run exec-producer doctor          # what's configured, what's ready, what's missing
 uv run exec-producer --list          # scenes from the starter show (examples/sunset_terrace)
 uv run exec-producer --scene rooftop_welcome --lines 6
 uv run exec-producer --episode premiere   # full episode — sessions persist across scenes
@@ -59,6 +60,26 @@ That runs a real scene: the director casts it, four archetypes on four different
 improvise it, and the script + raw JSON + telemetry land in `scripts/`. `--list-episodes`
 shows the episodes a show ships; an episode run keeps every character's memory alive from
 scene to scene, and the director casts each scene after the opener.
+
+### `exec-producer doctor`
+
+Everything that has to be true before a run costs money, checked in one command without
+starting one: which show is loaded, which guardrails are active, whether the director/judge/cast
+keys resolve, and whether each optional stage (`--audio`, `--video`, `--render-mode veo|vlog`,
+`--planner`) has its keys, binaries, extras, and voice coverage.
+
+```bash
+uv run exec-producer doctor          # human-readable report
+uv run exec-producer doctor --json   # same report, machine-readable
+```
+
+A missing optional extra is a warning, not a failure — the core engine runs fine without
+Pillow. Exit codes: **0** healthy, **1** a core check failed, **2** a check couldn't run at all
+(which is a different problem than "the answer is no").
+
+One class of problem doesn't reach the report: the show directory is loaded at import, before any
+command runs, so a contract violation is reported there instead. Missing files are listed
+legibly; malformed JSON or a missing required `world.json` key still surfaces as a raw traceback.
 
 ## Architecture
 
@@ -242,6 +263,58 @@ Set a hard cap in `world.json` that wins over whatever any episode config or CLI
 
 Every run prints a notice when the cap engages, so a capped run is visibly capped.
 
+### Budget gate — a run that stops before the bill does
+
+The money-shaped sibling of the content-rating cap. Set a ceiling in `world.json`:
+
+```json
+"budget": { "max_run_usd": 2.50 }
+```
+
+The generation loops — classic, episode, and the `--planner` graph — check the run's recorded
+spend between turns. Once it reaches the cap they stop generating and save everything produced
+so far, so a runaway episode costs you a scene, not a script.
+
+The media stages are gated too: a capped run won't go on to bill ElevenLabs for every line it
+already produced, or Veo for every beat. The judge and production-prompt stages still run (each
+bounded at three attempts per scene), so a capped run still yields its usual artifacts.
+
+Two limits worth knowing before you rely on it:
+
+- **It's a stop-line, not a ceiling.** A call's cost isn't knowable until it returns, so a run
+  overshoots by whatever was in flight — up to four billed calls in the classic loop, since a
+  turn is a director call plus a character call and each retries up to three times on malformed
+  JSON.
+- **It can't see media spend.** ElevenLabs bills per plan tier and the Veo API reports no
+  per-operation price, so those calls record cost as *unknown*, which counts as zero. The gate
+  stops the media stages once text generation trips it, but a mostly-video run can exceed the cap
+  without the cap noticing. For those runs the real controls are `vlog.max_clips`, `--dry-run`,
+  and `--clips-dir`.
+
+`"max_run_usd": 0` means *spend nothing*, not *no limit*; remove the key entirely for no cap. A
+non-numeric or negative value is rejected when the show loads, rather than at the first turn
+boundary after the run has already billed.
+
+Scope notes: an interactive shell session is one process, so its scenes share one budget — once
+spent, the shell says so and stops offering new scenes rather than producing empty ones. And a
+budget stop ends a `--planner` run permanently: the graph exits normally, so its checkpoint reads
+as finished and `--thread` won't resume it. The CLI warns before starting any capped planner run;
+making that resumable is tracked as future work.
+
+### Secret redaction — logs you can paste into an issue
+
+Everything reaching the package logger passes through a redacting formatter that masks
+vendor-prefixed API keys, `KEY=value` assignments, JSON credential fields, and bearer tokens.
+Long secrets keep a first-6/last-4 stub so "which key was that?" stays answerable; short ones are
+masked whole.
+
+This is defense in depth rather than a fix for a known leak — none of the supported providers
+currently echo a rejected key back in their error text, but that's their choice to change, not
+ours. It's deliberately conservative in the other direction too: a bare, prefix-less key in free
+prose will slip through, because a redactor that eats the error message destroys the diagnostic
+the line exists to deliver. Console `print()` output and the JSONL run log don't pass through the
+formatter; see [SECURITY.md](SECURITY.md) for what covers them.
+
 ### Audit trail — every run is reproducible and inspectable
 
 Every run produces, without any flags:
@@ -284,9 +357,14 @@ The image bundles ffmpeg + fonts (full media pipeline) and ships only the starte
 ## Development
 
 ```bash
-uv run pytest        # ~230 tests, all LLM/TTS/ffmpeg calls mocked, no network
+uv run pytest        # all LLM/TTS/ffmpeg calls mocked, no network, no keys
 uv sync --all-extras # audio + video + veo + vlog + planner extras
 ```
+
+CI runs the suite, a starter-show load check, a `doctor` contract assertion, the pre-commit
+hooks (actionlint + zizmor), and a `uv lock --check` gate on every push and PR. Contributor and
+agent-facing house rules are in [AGENTS.md](AGENTS.md); security posture and reporting are in
+[SECURITY.md](SECURITY.md).
 
 Notable pins: `litellm >=1.83,<1.92` (1.92 drops pure-Python wheels; the cap keeps Python 3.14
 viable everywhere, including the Docker image).

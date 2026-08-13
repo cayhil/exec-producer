@@ -55,6 +55,12 @@ traceable to the exact show files that produced it.
   its own decisions is the classic LLM-as-judge self-preference trap.
 - `content_rating.max_intensity` — optional hard cap applied to every run regardless of flags
   (the starter ships capped at `medium`). Remove the key for no cap.
+- `budget.max_run_usd` — optional spend ceiling, e.g. `"budget": {"max_run_usd": 2.50}`. The
+  generation loops and the media stages stop once the run's recorded cost reaches it, saving what
+  they produced. A stop-line rather than a hard ceiling — a call's cost is unknown until it
+  returns — and it cannot see ElevenLabs or Veo spend, which report no per-call price. Absent =
+  no cap; `0` = spend nothing. A non-numeric or negative value is rejected at load. See the
+  README's Budget gate section for the full limits.
 - `provider_env_keys` — provider name → env var holding its API key.
 - `reliability` — `num_retries`, `timeout_seconds`, and per-model `fallbacks`. Fallbacks are opt-in
   per model: give them to the director, not to cast members — a silent provider swap changes a

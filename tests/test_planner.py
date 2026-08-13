@@ -7,7 +7,7 @@ import sys
 
 import pytest
 
-from exec_producer import engine, planner
+from exec_producer import engine, planner, telemetry
 from tests.test_engine import CAST_IDS, FAKE_CAST, FAKE_TEMPLATE, SCENE
 
 
@@ -142,6 +142,40 @@ def test_routes():
     assert planner.route_after_wrap(state) == "end"
     state["scene_queue"].append({"scene_id": "test", "lines": 2})
     assert planner.route_after_wrap(state) == "next_scene"
+
+
+def test_the_arc_writer_is_skipped_once_the_cap_is_reached(monkeypatch):
+    # plan_scene runs before the graph's first routing decision, so without
+    # its own gate a capped run still pays for an arc it will never use —
+    # at max_tokens=2000, three attempts deep.
+    monkeypatch.setattr(telemetry, "MAX_RUN_USD", 1.0)
+    telemetry.get_run_log().record(caller="director", model="m", cost_usd=1.5)
+    monkeypatch.setattr(planner, "call_model_simple",
+                        lambda *a, **k: (_ for _ in ()).throw(
+                            AssertionError("billed the planner past the cap")))
+    state = planner.plan_scene({"scene_queue": [{"scene_id": "test", "lines": 3}],
+                                "scene_index": 0, "intensity": "low",
+                                "cast_ids": ["alpha"], "plan": None})
+    assert state.get("plan") in (None, [])
+
+
+def test_the_spend_cap_wraps_the_scene_instead_of_continuing(monkeypatch):
+    # The planner graph is a generation loop like the classic one, so the
+    # budget gate has to reach it too — otherwise --planner silently opts
+    # out of the cap.
+    monkeypatch.setattr(telemetry, "MAX_RUN_USD", 1.0)
+    telemetry.get_run_log().record(caller="director", model="m", cost_usd=1.5)
+    state = {"scene_queue": [{"scene_id": "test", "lines": 3}], "scene_index": 0,
+             "turn_index": 1}
+    assert planner.route_after_speak(state) == "wrap"
+
+
+def test_the_spend_cap_ends_the_run_instead_of_starting_a_scene(monkeypatch):
+    monkeypatch.setattr(telemetry, "MAX_RUN_USD", 1.0)
+    telemetry.get_run_log().record(caller="director", model="m", cost_usd=1.5)
+    state = {"scene_queue": [{"scene_id": "a", "lines": 1}, {"scene_id": "b", "lines": 1}],
+             "scene_index": 1, "turn_index": 1}
+    assert planner.route_after_wrap(state) == "end"
 
 
 # ── full graph runs ──────────────────────────────────────

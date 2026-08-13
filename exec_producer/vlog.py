@@ -324,7 +324,13 @@ def _generate_clips(plan, cfg, workdir, model, client=None):
         client = veo_client()
     log = telemetry.get_run_log()
     pairs, actuals = [], []
-    for beat in plan:
+    for i, beat in enumerate(plan):
+        # Budget gate, on top of max_clips: that cap bounds the plan size,
+        # this one bounds the run's total spend. Both matter — max_clips is
+        # per scene, so an episode multiplies it.
+        if telemetry.spend_exhausted():
+            print(f"  💸 Spend cap reached — {len(plan) - i} clip(s) left ungenerated")
+            break
         ref_paths = cfg["reference_images"].get(beat["entry"]["id"], [])
         start = time.time()
         try:

@@ -17,6 +17,23 @@ def clean_telemetry(tmp_path):
     telemetry._run_log = None
 
 
+@pytest.fixture(autouse=True)
+def clean_log_handlers():
+    """Drop package-logger handlers between tests.
+
+    Any test that runs cli.main() calls setup_logging, which attaches a
+    StreamHandler bound to *that* test's captured stdout — which pytest then
+    closes. The handler survives into later tests and raises "I/O operation
+    on closed file" the moment anything logs. Invisible today only because
+    logging swallows handler errors; now that the logger is a tested
+    surface, it's a landmine."""
+    logger = telemetry.get_logger()
+    saved = list(logger.handlers)
+    logger.handlers.clear()
+    yield
+    logger.handlers[:] = saved
+
+
 def make_response(content="hello", model="test-model", prompt_tokens=10,
                   completion_tokens=5, cost=0.001):
     """Minimal stand-in for a litellm.completion() response."""

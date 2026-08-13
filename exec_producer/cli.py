@@ -6,36 +6,42 @@ import random
 import sys
 from pathlib import Path
 
-from .config import (AUDIT, CAST, DIRECTOR_MODEL, EPISODES, PROVIDER_ENV_KEYS,
-                     SCENES, SHOW_NAME)
+from .config import (AUDIT, CAST, DIRECTOR_MODEL, EPISODES, MAX_RUN_USD,
+                     PROVIDER_ENV_KEYS, SCENES, SHOW_NAME)
 from .engine import RunOptions, check_api_keys, run_episode, run_scene
 from .errors import ConfigError, ThreadResumeError
-from .llm import api_key_set
+from .llm import api_key_set, provider_for_model
+from . import telemetry
 from .telemetry import setup_logging, start_run
-
-
-def _director_provider():
-    """Provider for the director model string. Bare names (no prefix) are
-    resolved through LiteLLM's registry — defaulting to openai would demand
-    the wrong key for a bare Anthropic model."""
-    if "/" in DIRECTOR_MODEL:
-        return DIRECTOR_MODEL.split("/", 1)[0]
-    try:
-        import litellm
-        return litellm.get_llm_provider(DIRECTOR_MODEL)[1]
-    except Exception:
-        return "openai"
 
 
 def director_key_or_die():
     """The director is the first spend of every run — fail before it, not
     after N degraded random-pick 'directing' calls."""
-    provider = _director_provider()
+    provider = provider_for_model(DIRECTOR_MODEL)
     env_key = PROVIDER_ENV_KEYS.get(provider, "")
     if not env_key or not api_key_set(env_key):
         need = env_key or f"a provider_env_keys entry for '{provider}'"
         print(f"❌ Director model {DIRECTOR_MODEL} needs {need} set in .env")
         sys.exit(1)
+
+
+def session_budget_spent():
+    """True when the interactive session's budget is gone — with a notice,
+    every time, not once.
+
+    The shell runs many scenes inside ONE process, and the budget is per
+    process, so a session shares one cap: N scenes can't quietly spend N
+    times it. Once it's gone every further scene would generate nothing, so
+    the shell declines to start one rather than printing a banner, producing
+    no dialogue, and saving an empty .txt/.json for it."""
+    if not telemetry.spend_exhausted():
+        return False
+    summary = telemetry.get_run_log().summary()
+    print(f"\n  💸 Session budget spent — ${summary['total_cost_usd']:.4f} across "
+          f"{summary['calls']} calls. Scenes in one shell session share one budget.")
+    print("     Raise budget.max_run_usd in world.json, or restart for a fresh session.")
+    return True
 
 
 def interactive_mode():
@@ -108,10 +114,11 @@ def interactive_mode():
     inp = input("Generate production prompts for Gemini/Veo 3? (y/n, default n): ").strip()
     produce = inp.lower() == "y"
 
-    run_scene(scene_id, cast_ids,
-              RunOptions(num_lines=num_lines, produce=produce, intensity=intensity))
+    if not session_budget_spent():
+        run_scene(scene_id, cast_ids,
+                  RunOptions(num_lines=num_lines, produce=produce, intensity=intensity))
 
-    while True:
+    while not session_budget_spent():
         again = input("\n🎬 Another scene? (y/n): ").strip().lower()
         if again != "y":
             print("\n👋 Season wrap. ✌️\n")
@@ -153,6 +160,27 @@ def media_preflight_or_die(cast_ids, audio=False, video=False, render_mode="tts"
         for p in problems:
             print(f"❌ {p}")
         sys.exit(1)
+
+
+def warn_if_budget_blocks_resume(planner):
+    """Say up front that a budget stop ends a planned run for good.
+
+    KNOWN LIMITATION, deliberately surfaced rather than silently endured:
+    when the cap stops a --planner run, the graph reaches END normally, so
+    the checkpoint records the run as *finished* and --thread refuses to
+    resume it. Raising the cap doesn't help — the user starts a new thread
+    and re-pays for turns they already bought. Fixing that properly means
+    pausing the graph instead of ending it, which is its own piece of work;
+    until then the least we owe them is not to spring it after the fact.
+    Classic runs have no checkpoints to lose, so they get no warning."""
+    # `is None`, not truthiness: a cap of 0 is the strictest setting
+    # there is, and it must not be the one that skips the warning.
+    if not planner or MAX_RUN_USD is None:
+        return
+    print(f"\n  ⚠️  Budget cap (${MAX_RUN_USD:.2f}) is set and this is a --planner run.")
+    print("     If the cap stops the run, its thread is marked complete and "
+          "--thread can't resume it —")
+    print("     you'd start a new thread and re-pay for the turns already generated.")
 
 
 def planner_preflight_or_die():
@@ -201,7 +229,16 @@ def resolve_cast(cast_arg):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="EXECUTIVE PRODUCER — Autonomous Reality Show Engine")
+    # allow_abbrev=False is load-bearing, not tidiness. bootstrap.py matches
+    # the exact string "--data-dir" to set EXEC_PRODUCER_DATA_DIR before
+    # config imports; argparse's default prefix matching accepted
+    # `--data-di X`, which argparse bound happily while bootstrap ignored it
+    # — so the command ran the DEFAULT show while appearing to select X.
+    # Wrong show, real spend. It also keeps the bare-token `render`/`doctor`
+    # rewrite below honest, since value_flags lists only full spellings.
+    parser = argparse.ArgumentParser(
+        description="EXECUTIVE PRODUCER — Autonomous Reality Show Engine",
+        allow_abbrev=False)
     parser.add_argument("--scene", type=str)
     parser.add_argument("--cast", type=str)
     parser.add_argument("--lines", type=int, default=15)
@@ -267,21 +304,45 @@ def main():
                              "no director key (except --produce, which bills the director "
                              "model). Intensity comes from the file. "
                              "Sugar: exec-producer render <file>")
+    parser.add_argument("--doctor", action="store_true",
+                        help="Health check: show contract, API keys, and every "
+                             "optional stage (--audio/--video/--render-mode "
+                             "veo|vlog/--planner), without starting a run. "
+                             "Exits 0 healthy, 1 if a core check failed, 2 if a "
+                             "check couldn't run. Sugar: exec-producer doctor")
+    parser.add_argument("--json", action="store_true",
+                        help="With doctor: emit the report as JSON instead of "
+                             "human-readable text")
 
-    # `exec-producer render <scene.json>` is sugar for --from-script. The
-    # token may follow leading flags (--data-dir X render f.json) — it is
-    # only skipped when it's the VALUE of a value-taking option, so
-    # `--scene render` still means a scene literally named "render".
+    # `exec-producer render <scene.json>` and `exec-producer doctor` are
+    # sugar for their flags. The token may follow leading flags (--data-dir X
+    # render f.json) — it is only skipped when it's the VALUE of a
+    # value-taking option, so `--scene render` still means a scene literally
+    # named "render".
     value_flags = {"--scene", "--cast", "--lines", "--episode", "--intensity",
                    "--render-mode", "--thread", "--data-dir", "--from-script",
                    "--clips-dir"}
     argv = sys.argv[1:]
     for i, tok in enumerate(argv):
-        if tok == "render" and (i == 0 or argv[i - 1] not in value_flags):
-            argv = argv[:i] + ["--from-script"] + argv[i + 1:]
+        if tok in ("render", "doctor") and (i == 0 or argv[i - 1] not in value_flags):
+            replacement = "--from-script" if tok == "render" else "--doctor"
+            argv = argv[:i] + [replacement] + argv[i + 1:]
             break
 
     args = parser.parse_args(argv)
+    if args.json and not args.doctor:
+        print("❌ --json is part of the doctor report — use with: exec-producer doctor --json")
+        sys.exit(1)
+    if args.doctor:
+        # Before every gate and every flag-compatibility check: the whole
+        # point is to run on a broken install, so it must not need a
+        # working one. Makes no LLM calls, so no run log either.
+        from . import doctor as doctor_module
+        setup_logging(debug=args.debug)
+        checks = doctor_module.run_checks()
+        print(json.dumps(doctor_module.to_json(checks), indent=2) if args.json
+              else doctor_module.format_human(checks))
+        sys.exit(doctor_module.exit_code(checks))
     if args.lines < 1:
         # The classic loop would save an empty script; the planner graph
         # would still direct-and-bill one line (plan → direct → speak runs
@@ -422,6 +483,7 @@ def main():
                           render_mode=args.render_mode)
         if args.planner:
             planner_preflight_or_die()
+            warn_if_budget_blocks_resume(args.planner)
             from .planner import run_episode_planned
             try:
                 run_episode_planned(args.episode, available, opts, thread_id=args.thread)
@@ -452,6 +514,7 @@ def main():
                           render_mode=args.render_mode)
         if args.planner:
             planner_preflight_or_die()
+            warn_if_budget_blocks_resume(args.planner)
             from .planner import run_scene_planned
             try:
                 run_scene_planned(args.scene, available, opts, thread_id=args.thread)

@@ -10,22 +10,37 @@ from collections import Counter, defaultdict
 from datetime import datetime
 from pathlib import Path
 
+from .config import MAX_RUN_USD
+from .redact import RedactingFormatter
+
 _LOGGER_NAME = "exec_producer"
 
 
 def setup_logging(debug=False):
-    """Configure the package logger. --debug maps to DEBUG level."""
+    """Configure the package logger. --debug maps to DEBUG level.
+
+    Every handler installed here formats through RedactingFormatter. Log
+    lines carry provider-controlled text and are what users paste into bug
+    reports. This is defense in depth, not a fix for a known leak — no
+    supported provider currently echoes a rejected key back in its error
+    text, but that is their choice to change, not ours."""
     logger = logging.getLogger(_LOGGER_NAME)
     if not logger.handlers:
-        handler = logging.StreamHandler(sys.stdout)
-        handler.setFormatter(logging.Formatter("  [%(levelname)s] %(message)s"))
-        logger.addHandler(handler)
+        logger.addHandler(logging.StreamHandler(sys.stdout))
+    # Set the formatter on every call, not just when installing the handler:
+    # otherwise a handler attached before this ran (an embedding app, an
+    # earlier setup_logging) would keep its un-redacting formatter forever.
+    for handler in logger.handlers:
+        handler.setFormatter(RedactingFormatter("  [%(levelname)s] %(message)s"))
     logger.setLevel(logging.DEBUG if debug else logging.INFO)
     logger.propagate = False
     # LiteLLM's own logger prints a full traceback at ERROR for every failed
     # attempt (bad key, quota, timeout). The engine already prints a one-line
     # outcome per call with the reason and records it in the run log — keep
-    # the raw spew behind --debug.
+    # the raw spew behind --debug. Nothing else is done to that logger:
+    # litellm._logging installs a handler carrying SecretRedactionFilter,
+    # which already scrubs its message, args, tracebacks, and extras, so a
+    # second redacting handler here would only duplicate every debug line.
     logging.getLogger("LiteLLM").setLevel(logging.DEBUG if debug else logging.CRITICAL)
 
 
@@ -41,6 +56,50 @@ def get_logger(name=_LOGGER_NAME):
 # LiteLLM logic and subtly change retry-then-fallback semantics, so we keep
 # LiteLLM's built-ins and record terminal outcomes only: success, failure
 # (with error type), and fallback engagement.
+
+def spend_exhausted():
+    """True once this run's recorded spend has reached the configured cap.
+
+    Checked at unit-of-work boundaries — between turns, between scenes,
+    per TTS line, per Veo beat, per vlog clip — never inside call_model.
+    Two reasons: a call's cost is unknowable until it returns, and stopping
+    at a boundary lets the caller save everything it already produced
+    instead of losing paid-for work to an exception.
+
+    Two limits, both documented in README and SECURITY:
+
+    - Stop-line, not a ceiling. A classic turn is a director call plus a
+      character call, each retried up to 3x on malformed JSON, so a run can
+      overshoot by up to four billed calls.
+    - Blind to media spend. ElevenLabs bills per plan tier and the Veo API
+      reports no per-operation price, so those calls record cost=None,
+      which total_cost_usd() counts as zero. The gate still STOPS the media
+      stages once text generation trips it, but media alone can exceed the
+      cap without ever tripping it — vlog.max_clips and --dry-run are the
+      controls there.
+
+    The judge and production-prompt stages deliberately still run (each
+    bounded at 3 attempts per scene) so a capped run keeps its artifacts.
+
+    No cap configured (the default) means this is always False.
+    """
+    # `is None`, not truthiness: a configured cap of 0 means "spend nothing"
+    # and must stop the run, not read as "unconfigured".
+    if MAX_RUN_USD is None:
+        return False
+    run_log = get_run_log()
+    spent = run_log.total_cost_usd()
+    if spent < MAX_RUN_USD:
+        return False
+    # Announce once per run. The flag lives on the run log, not at module
+    # level, for the same reason the reliability counters do: a process that
+    # starts several runs must not bleed state between them.
+    if not run_log.spend_cap_announced:
+        run_log.spend_cap_announced = True
+        print(f"\n  💸 Spend cap reached (${spent:.4f} of ${MAX_RUN_USD:.2f} "
+              "budget.max_run_usd) — stopping generation, saving what's done")
+    return True
+
 
 def record_failure(model):
     get_run_log().failures[model] += 1
@@ -75,6 +134,9 @@ class RunLog:
         # bleed counts between them.
         self.failures = Counter()
         self.fallbacks = Counter()
+        # Set once the budget cap stops this run, so the notice prints once
+        # rather than at every turn boundary that re-checks it.
+        self.spend_cap_announced = False
 
     def record(self, **fields):
         rec = {"ts": datetime.now().isoformat(timespec="seconds"), **fields}
@@ -85,6 +147,13 @@ class RunLog:
                 f.write(json.dumps({"ts": rec["ts"], "event": "run_start", **self.header}) + "\n")
                 self._header_written = True
             f.write(json.dumps(rec) + "\n")
+
+    def total_cost_usd(self):
+        """Spend recorded so far. Calls whose cost is unknown (TTS bills per
+        plan tier, external renders don't generate) count as zero — the only
+        honest option, and the reason the cap is a floor, not a guarantee."""
+        return sum(r["cost_usd"] for r in self.records
+                   if not r.get("error") and r.get("cost_usd") is not None)
 
     def summary(self):
         ok = [r for r in self.records if not r.get("error")]

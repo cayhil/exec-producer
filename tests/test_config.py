@@ -8,7 +8,24 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from exec_producer import bootstrap, config
+
+
+def test_an_abbreviated_data_dir_flag_is_rejected_not_silently_ignored(monkeypatch, capsys):
+    # bootstrap matches the exact string "--data-dir" to set the env var,
+    # but argparse used to accept abbreviations — so `--data-di X --list`
+    # ran the DEFAULT show while looking like it selected X. Wrong show,
+    # real spend.
+    from exec_producer import cli
+
+    monkeypatch.setattr(sys, "argv",
+                        ["exec-producer", "--data-di", "examples/night_signal", "--list"])
+    with pytest.raises(SystemExit) as exit_info:
+        cli.main()
+    assert exit_info.value.code != 0
+    assert "--data-di" in capsys.readouterr().err
 
 
 def test_validate_data_dir_accepts_the_loaded_show():

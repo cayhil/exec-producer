@@ -1,0 +1,140 @@
+name: CI
+
+# The whole suite is mocked at the LiteLLM boundary — no API keys, no
+# network, no ffmpeg — so CI is just "install and run it". Nothing here
+# can spend money, which is the property worth protecting: keep it that
+# way when adding tests.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    name: pytest
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # Actions are pinned by commit SHA, not tag: a tag can be moved to
+      # point at new code, and these run with access to the workflow token.
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          # Don't leave the workflow token in .git/config for later steps.
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          # Pinning uv itself, not just the action: without this the action
+          # resolves "latest" at run time, so a uv release could break CI
+          # with no change in this repo — and the step below claims a
+          # reproducible install.
+          version: "0.9.8"
+          # Persists uv's wheel cache across runs, keyed on the dependency
+          # manifests — reused until pyproject.toml or uv.lock changes.
+          enable-cache: true
+          cache-dependency-glob: |
+            pyproject.toml
+            uv.lock
+
+      # --locked installs exactly what uv.lock pins and fails on a stale
+      # lockfile, so the suite runs against a reproducible dependency set
+      # rather than whatever resolves fresh today. --all-extras covers the
+      # optional media/planner paths; their tests importorskip without it.
+      - name: Install dependencies
+        run: uv sync --locked --all-extras
+
+      - name: Run tests
+        run: uv run pytest -q
+
+      # The starter shows are part of the public contract — a fresh clone
+      # must run without a data/ directory, and CI is the only place that
+      # state is reproduced (a maintainer's checkout always has one).
+      - name: Verify the committed starter shows still load
+        run: |
+          uv run exec-producer --data-dir examples/sunset_terrace --list
+          uv run exec-producer --data-dir examples/night_signal --list-episodes
+
+      # doctor exits non-zero when a core check fails. With no API keys in
+      # CI that is the expected state, so assert the report renders and the
+      # exit code is the documented one rather than a crash.
+      - name: Verify doctor reports a keyless install correctly
+        run: |
+          set +e
+          uv run exec-producer --data-dir examples/night_signal doctor --json > report.json
+          code=$?
+          set -e
+          if [ "$code" -ne 1 ]; then
+            echo "::error::doctor should exit 1 with no API keys set, got $code"
+            exit 1
+          fi
+          uv run python -c "
+          import json, sys
+          report = json.load(open('report.json'))
+          assert report['schema_version'] == '1', report
+          assert report['overall'] == 'failed', report
+          ids = {c['id'] for c in report['checks']}
+          assert {'show', 'director-key', 'cast-keys'} <= ids, ids
+          print('doctor report OK')
+          "
+
+  hooks:
+    name: pre-commit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.9.8"
+
+      # The hooks include actionlint and zizmor, which audit these very
+      # workflow files. Leaving them contributor-optional meant a PR that
+      # edited .github/ got no lint at all — the one place it matters most,
+      # since CI runs with a token.
+      - name: Run pre-commit hooks
+        run: uvx pre-commit run --all-files --show-diff-on-failure
+
+  lockfile:
+    name: uv lock --check
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.9.8"
+
+      # Re-resolves pyproject.toml and compares against uv.lock. Blocking,
+      # because the Docker image builds with a frozen lockfile — catching
+      # drift here beats a failed image build later.
+      #
+      # On a PR this runs against the MERGED state (your branch + current
+      # main), so it can fail while passing locally: that means main moved
+      # its dependencies since you branched. Fix by syncing with main and
+      # re-running `uv lock`.
+      - name: Verify uv.lock is in sync with pyproject.toml
+        run: |
+          if ! uv lock --check; then
+            echo "::error title=uv.lock out of sync::Run 'uv lock' locally and commit the result. On a PR, sync with main first."
+            exit 1
+          fi
