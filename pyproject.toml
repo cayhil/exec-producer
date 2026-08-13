@@ -5,7 +5,7 @@ description = "Autonomous multi-agent reality show engine — a director LLM orc
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
-    "litellm>=1.83.0,<1.92",
+    "litellm>=1.95.0,<1.96",
     "python-dotenv>=1.2.2",
 ]
 
