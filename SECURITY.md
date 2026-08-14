@@ -81,13 +81,25 @@ Anything that bills is gated before the first call, not after:
   once text generation has tripped it — but a run that is mostly or entirely
   video can exceed the cap without the cap ever noticing. For those runs the
   real controls are `vlog.max_clips`, `--dry-run`, and `--clips-dir`.
-- It is per process, and one interactive shell session is one process — so
-  scenes in a session share a budget rather than each getting a fresh one.
-- **A budget stop ends a `--planner` run for good.** The graph exits
-  normally, so its checkpoint records the run as finished and `--thread`
-  refuses to resume it; you start a new thread and re-pay for turns already
-  generated. The CLI warns about this at the start of any capped planner
-  run. Resuming a *different* thread also starts a fresh budget.
+- It is per process — with one exception: a planner thread's `--thread`
+  resumes share one cumulative budget (next bullet) — and one interactive
+  shell session is one process, so scenes in a session share a budget
+  rather than each getting a fresh one.
+- **A `--planner` budget stop pauses the thread instead of ending it.** The
+  checkpoint stays resumable: raise the cap and `--thread` continues without
+  re-billing a completed turn. Resumes share one cumulative budget — the
+  checkpoint carries the thread's recorded text spend and every resume seeds
+  its budget from it before entering the graph. Like the cap itself, that
+  ledger is a stop-line, not a ceiling: it records in-graph text spend only
+  (a completed thread's re-save still bills the bounded judge/production
+  stages, and that spend is not written back); a crash between a billed call
+  and its checkpoint write drops that window's spend; threads checkpointed
+  before this feature seed zero (the resume says so); and two concurrent
+  resumes of one thread are not locked out — both would bill. The media
+  blindness above applies to the seeded number too. The planner's worst
+  inter-gate overshoot is up to 3 casting attempts, or 3 arc attempts at
+  max_tokens=2000, or 3 director attempts plus 1 character call. Resuming a
+  *different* thread still starts a fresh budget.
 
 ### Untrusted show directories
 

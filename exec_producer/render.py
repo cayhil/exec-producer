@@ -149,7 +149,12 @@ def load_external_scene(path):
 
     return {"scene_id": scene_id, "scene": scene, "conversation": normalized,
             "director_notes": director_notes, "cast_ids": cast_ids,
-            "intensity": engine.effective_intensity(intensity)}
+            "intensity": engine.effective_intensity(intensity),
+            # Additive-optional contract key: a budget-paused planner save.
+            # Surfaced so the render path can warn and re-stamp it —
+            # dropping it would promote a half-finished script to a
+            # complete-looking one.
+            "partial": bool(data.get("partial"))}
 
 
 def render_external_scene(data, opts):
@@ -162,7 +167,11 @@ def render_external_scene(data, opts):
     print(f"🎬  Scene: {data['scene']['name']}  ({len(data['conversation'])} lines)")
     print(f"🎭  Cast: {names}")
     print("=" * 60)
+    if data.get("partial"):
+        print("  ⚠️  This scene is marked partial (a budget-paused save) — "
+              "the downstream stages will bill on a half-finished script")
     return engine.save_scene_outputs(
         data["scene_id"], data["scene"], data["conversation"],
         data["director_notes"], data["cast_ids"], opts, data["intensity"],
+        extra_json={"partial": True} if data.get("partial") else None,
         audit_extra=EXTERNAL_AUDIT)

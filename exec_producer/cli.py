@@ -6,7 +6,7 @@ import random
 import sys
 from pathlib import Path
 
-from .config import (AUDIT, CAST, DIRECTOR_MODEL, EPISODES, MAX_RUN_USD,
+from .config import (AUDIT, CAST, DIRECTOR_MODEL, EPISODES,
                      PROVIDER_ENV_KEYS, SCENES, SHOW_NAME)
 from .engine import RunOptions, check_api_keys, run_episode, run_scene
 from .errors import ConfigError, ThreadResumeError
@@ -160,27 +160,6 @@ def media_preflight_or_die(cast_ids, audio=False, video=False, render_mode="tts"
         for p in problems:
             print(f"❌ {p}")
         sys.exit(1)
-
-
-def warn_if_budget_blocks_resume(planner):
-    """Say up front that a budget stop ends a planned run for good.
-
-    KNOWN LIMITATION, deliberately surfaced rather than silently endured:
-    when the cap stops a --planner run, the graph reaches END normally, so
-    the checkpoint records the run as *finished* and --thread refuses to
-    resume it. Raising the cap doesn't help — the user starts a new thread
-    and re-pays for turns they already bought. Fixing that properly means
-    pausing the graph instead of ending it, which is its own piece of work;
-    until then the least we owe them is not to spring it after the fact.
-    Classic runs have no checkpoints to lose, so they get no warning."""
-    # `is None`, not truthiness: a cap of 0 is the strictest setting
-    # there is, and it must not be the one that skips the warning.
-    if not planner or MAX_RUN_USD is None:
-        return
-    print(f"\n  ⚠️  Budget cap (${MAX_RUN_USD:.2f}) is set and this is a --planner run.")
-    print("     If the cap stops the run, its thread is marked complete and "
-          "--thread can't resume it —")
-    print("     you'd start a new thread and re-pay for the turns already generated.")
 
 
 def planner_preflight_or_die():
@@ -483,7 +462,6 @@ def main():
                           render_mode=args.render_mode)
         if args.planner:
             planner_preflight_or_die()
-            warn_if_budget_blocks_resume(args.planner)
             from .planner import run_episode_planned
             try:
                 run_episode_planned(args.episode, available, opts, thread_id=args.thread)
@@ -514,7 +492,6 @@ def main():
                           render_mode=args.render_mode)
         if args.planner:
             planner_preflight_or_die()
-            warn_if_budget_blocks_resume(args.planner)
             from .planner import run_scene_planned
             try:
                 run_scene_planned(args.scene, available, opts, thread_id=args.thread)

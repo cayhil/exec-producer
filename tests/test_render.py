@@ -120,6 +120,20 @@ def test_render_writes_outputs_with_external_audit(tmp_path, monkeypatch):
     assert "telemetry" in saved
 
 
+def test_a_partial_scene_renders_with_its_marker_preserved(tmp_path, monkeypatch, capsys):
+    # A budget-paused save is a valid, renderable scene — but silently
+    # dropping the marker on re-save would launder a half-finished script
+    # into a complete-looking one, and the user should hear that the
+    # stages they're about to bill run on a partial scene.
+    payload = {**VALID, "partial": True}
+    data, _ = render_scene(tmp_path, monkeypatch, payload=payload)
+    assert data["partial"] is True
+    assert "partial" in capsys.readouterr().out.lower()
+    jsons = list((tmp_path / "scripts").glob("test_show_my_scene_*.json"))
+    saved = json.loads(jsons[0].read_text())
+    assert saved["partial"] is True
+
+
 def test_render_eval_writes_externally_stamped_scorecard(tmp_path, monkeypatch):
     card = {"overall": {"score": 8}}
     judged = []

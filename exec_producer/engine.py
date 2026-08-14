@@ -73,6 +73,14 @@ class RunOptions:
     render_mode: str = "tts"  # or "veo"/"vlog": generated footage instead of cards
     clips_dir: str = ""       # vlog bring-your-own-clips folder (via --from-script)
 
+    def without_billed_stages(self):
+        """The same run minus every stage that bills on its own
+        (--eval/--audio/--video/--produce). Lives here, next to the field
+        list it must track, so a future billed flag can't be silently
+        missed by the planner's pause-save."""
+        return replace(self, evaluate=False, audio=False, video=False,
+                       produce=False)
+
 
 def effective_intensity(requested):
     """Apply the content-rating cap (content_rating.max_intensity in

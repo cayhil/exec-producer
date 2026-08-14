@@ -296,10 +296,17 @@ non-numeric or negative value is rejected when the show loads, rather than at th
 boundary after the run has already billed.
 
 Scope notes: an interactive shell session is one process, so its scenes share one budget — once
-spent, the shell says so and stops offering new scenes rather than producing empty ones. And a
-budget stop ends a `--planner` run permanently: the graph exits normally, so its checkpoint reads
-as finished and `--thread` won't resume it. The CLI warns before starting any capped planner run;
-making that resumable is tracked as future work.
+spent, the shell says so and stops offering new scenes rather than producing empty ones.
+
+A `--planner` run pauses instead of ending when the cap trips: the thread's checkpoint stays
+resumable, so you can raise `max_run_usd` in `world.json` and continue with
+`--planner --thread <id>` without re-billing a single completed turn. What was already generated
+is saved at pause time (marked `"partial": true`); the judge and media stages are skipped at the
+pause and run at resumed completion instead — re-pass those flags on the resume command and leave
+the cap some headroom for them (they still respect it), or run them later with zero generation
+spend via `render <saved>.json --audio`. Resumes share one cumulative budget: the checkpoint
+carries the thread's recorded spend, and every resume counts it against the cap before billing
+anything new.
 
 ### Secret redaction — logs you can paste into an issue
 

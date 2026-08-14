@@ -119,7 +119,9 @@ def check_show():
     # run that stops early), so a user diagnosing "why did it stop?" should
     # find the answer here rather than by reading world.json.
     if MAX_RUN_USD is not None:
-        details.append(f"budget.max_run_usd: generation stops at ${MAX_RUN_USD:.2f}")
+        details.append(f"budget.max_run_usd: generation stops at ${MAX_RUN_USD:.2f}"
+                       "; planner runs pause and resume via --thread on one "
+                       "cumulative budget")
     if MAX_INTENSITY:
         details.append(f"content_rating.max_intensity: capped at {MAX_INTENSITY}")
     return Check(

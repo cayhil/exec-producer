@@ -81,6 +81,13 @@ def spend_exhausted():
     The judge and production-prompt stages deliberately still run (each
     bounded at 3 attempts per scene) so a capped run keeps its artifacts.
 
+    On a planner --thread resume, spend seeded from the checkpoint counts
+    toward the cap too — resumes share one cumulative budget. The seeded
+    ledger is itself a stop-line, not a ceiling: it records in-graph text
+    spend only (save-time judge/production spend is not written back), and
+    a crash between a billed call and its checkpoint write drops that
+    window's spend.
+
     No cap configured (the default) means this is always False.
     """
     # `is None`, not truthiness: a configured cap of 0 means "spend nothing"
@@ -88,7 +95,7 @@ def spend_exhausted():
     if MAX_RUN_USD is None:
         return False
     run_log = get_run_log()
-    spent = run_log.total_cost_usd()
+    spent = run_log.cumulative_spend_usd()
     if spent < MAX_RUN_USD:
         return False
     # Announce once per run. The flag lives on the run log, not at module
@@ -99,6 +106,27 @@ def spend_exhausted():
         print(f"\n  💸 Spend cap reached (${spent:.4f} of ${MAX_RUN_USD:.2f} "
               "budget.max_run_usd) — stopping generation, saving what's done")
     return True
+
+
+def seed_prior_spend(amount):
+    """Carry an earlier process's recorded spend into this run's budget
+    (planner --thread resume).
+
+    Precondition, stated rather than enforced: one fresh RunLog per thread
+    — every supported resume is a fresh process (one CLI command is one
+    process; the interactive shell has no planner), so seeding cannot
+    double-count records already in the live log. max() so a smaller or
+    negative seed can never LOWER a floor already set. Unlike the cap
+    (where 0 means "spend nothing"), a zero/absent seed just means
+    "nothing to carry", so skipping it is safe — don't "fix" this into
+    the cap's is-None dance."""
+    log = get_run_log()
+    seeded = max(0.0, float(amount or 0.0))
+    if seeded <= log.prior_spend_usd:
+        return
+    log.prior_spend_usd = seeded
+    print(f"  💰 This thread has already spent ${seeded:.4f} "
+          "(carried into this run's budget)")
 
 
 def record_failure(model):
@@ -137,6 +165,11 @@ class RunLog:
         # Set once the budget cap stops this run, so the notice prints once
         # rather than at every turn boundary that re-checks it.
         self.spend_cap_announced = False
+        # Spend recorded by earlier processes on the same planner thread,
+        # seeded from the checkpoint on a --thread resume. Kept off the
+        # records so summary()["total_cost_usd"] stays an audit of THIS
+        # process's calls; the cumulative number gets its own summary key.
+        self.prior_spend_usd = 0.0
 
     def record(self, **fields):
         rec = {"ts": datetime.now().isoformat(timespec="seconds"), **fields}
@@ -151,9 +184,18 @@ class RunLog:
     def total_cost_usd(self):
         """Spend recorded so far. Calls whose cost is unknown (TTS bills per
         plan tier, external renders don't generate) count as zero — the only
-        honest option, and the reason the cap is a floor, not a guarantee."""
+        honest option, and the reason the cap is a floor, not a guarantee.
+
+        The budget gate compares the cap against cumulative_spend_usd(),
+        not this — on a --thread resume the two differ."""
         return sum(r["cost_usd"] for r in self.records
                    if not r.get("error") and r.get("cost_usd") is not None)
+
+    def cumulative_spend_usd(self):
+        """This process's recorded spend plus what earlier runs of the same
+        planner thread recorded (seeded on --thread resume). The budget
+        gate compares the cap against this, so N resumes share ONE budget."""
+        return self.total_cost_usd() + self.prior_spend_usd
 
     def summary(self):
         ok = [r for r in self.records if not r.get("error")]
@@ -169,6 +211,10 @@ class RunLog:
             "calls": len(self.records),
             "total_tokens": sum(r.get("total_tokens") or 0 for r in ok),
             "total_cost_usd": round(sum(r["cost_usd"] for r in ok if r.get("cost_usd") is not None), 6),
+            "prior_spend_usd": round(self.prior_spend_usd, 6),
+            "cumulative_cost_usd": round(
+                self.prior_spend_usd
+                + sum(r["cost_usd"] for r in ok if r.get("cost_usd") is not None), 6),
             "calls_with_unknown_cost": sum(1 for r in ok if r.get("cost_usd") is None),
             "by_caller": {k: {**v, "cost_usd": round(v["cost_usd"], 6)}
                           for k, v in sorted(by_caller.items())},
@@ -200,6 +246,9 @@ def print_run_summary():
     unknown = f" (+{s['calls_with_unknown_cost']} calls with unknown cost)" if s["calls_with_unknown_cost"] else ""
     print("\n  ── Run Summary ──")
     print(f"  {s['calls']} calls | {s['total_tokens']:,} tokens | ${s['total_cost_usd']:.4f}{unknown} | {s['wall_clock_seconds']}s wall clock")
+    if s["prior_spend_usd"]:
+        print(f"  carried from earlier runs of this thread: "
+              f"${s['prior_spend_usd']:.4f} (cumulative ${s['cumulative_cost_usd']:.4f})")
     for caller, v in s["by_caller"].items():
         print(f"    {caller:12s} {v['calls']:3d} calls  {v['tokens']:>8,} tokens  ${v['cost_usd']:.4f}")
     failures = sum(s["terminal_failures"].values())

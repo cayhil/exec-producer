@@ -151,6 +151,10 @@ Field rules:
   pass through untouched.
 - `director_notes` — optional list of objects, index-paired with `conversation`;
   `stage_direction` and `emotional_state` are the useful keys.
+- `partial` (optional, boolean) — written by the engine when a budget pause
+  saved the scene mid-generation; never set by hand. The file is a normal,
+  renderable scene — the marker just says the dialogue stopped short of its
+  planned length, and `render` preserves it on re-save.
 
 Vlog-mode per-line fields (optional; only read by `--render-mode vlog`):
 

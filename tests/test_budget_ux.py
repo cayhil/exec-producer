@@ -1,5 +1,5 @@
 """How the spend cap behaves at the edges a user actually hits: the
-interactive shell, a planner run that can't be resumed, and the empty scene
+interactive shell, a planner run that pauses, and the empty scene
 an episode produces when the cap trips at a scene boundary."""
 
 import pytest
@@ -80,40 +80,57 @@ def test_no_budget_configured_leaves_the_shell_alone(shell, monkeypatch):
     assert shell == ["test", "test"]
 
 
-# ── planner + budget: warn before the surprise ───────────
+# ── cumulative spend: resumes share one budget ───────────
 
-def test_a_planned_run_warns_that_a_budget_stop_cannot_be_resumed(
-        monkeypatch, capsys):
-    # A budget stop ends a planner run for good: the graph reaches END, so
-    # the checkpoint records it as finished and --thread refuses to resume.
-    # The user re-pays for turns they already bought. Until that's fixed,
-    # they should at least hear about it first.
-    monkeypatch.setattr(cli, "MAX_RUN_USD", 2.5)
-    cli.warn_if_budget_blocks_resume(planner=True)
-    out = capsys.readouterr().out
-    assert "--thread" in out and "resume" in out.lower()
+def test_seeded_prior_spend_counts_toward_the_cap(monkeypatch):
+    # Each resume is a fresh process with an empty RunLog. Without seeding,
+    # N resumes of one thread could each spend the full cap; the checkpoint
+    # carries cumulative spend and the gate must count it. Binary-exact
+    # amounts (0.75 + 0.125 + 0.125 == 1.0) so the >= trip point is tested
+    # by construction, not by rounding luck.
+    monkeypatch.setattr(telemetry, "MAX_RUN_USD", 1.0)
+    telemetry.seed_prior_spend(0.75)
+    spend(0.125)
+    assert not telemetry.spend_exhausted()
+    spend(0.125)
+    assert telemetry.spend_exhausted()
 
 
-def test_no_warning_without_a_budget(monkeypatch, capsys):
-    monkeypatch.setattr(cli, "MAX_RUN_USD", None)
-    cli.warn_if_budget_blocks_resume(planner=True)
+def test_seeding_zero_is_a_no_op(capsys):
+    # Pre-feature checkpoints have no spent_usd and seed 0 — no banner, no
+    # budget effect (same exposure as before the feature; the resume path
+    # prints its own "fresh budget" notice, tested in test_planner.py).
+    telemetry.seed_prior_spend(0.0)
+    assert telemetry.get_run_log().prior_spend_usd == 0.0
     assert capsys.readouterr().out == ""
 
 
-def test_no_warning_for_a_classic_run(monkeypatch, capsys):
-    # The classic loop has no checkpoints to lose.
-    monkeypatch.setattr(cli, "MAX_RUN_USD", 2.5)
-    cli.warn_if_budget_blocks_resume(planner=False)
-    assert capsys.readouterr().out == ""
+def test_seeding_never_lowers_the_floor():
+    # A second, smaller (or negative) seed must not loosen the budget.
+    telemetry.seed_prior_spend(1.5)
+    telemetry.seed_prior_spend(0.5)
+    telemetry.seed_prior_spend(-3.0)
+    assert telemetry.get_run_log().prior_spend_usd == 1.5
 
 
-def test_a_zero_budget_still_warns(monkeypatch, capsys):
-    # 0 is a configured cap, not an absent one. A truthiness test here
-    # silently skipped the warning for the strictest setting there is.
-    monkeypatch.setattr(cli, "MAX_RUN_USD", 0)
-    cli.warn_if_budget_blocks_resume(planner=True)
-    assert "--thread" in capsys.readouterr().out
+def test_seeding_announces_the_carried_spend(capsys):
+    telemetry.seed_prior_spend(1.25)
+    assert "1.25" in capsys.readouterr().out
 
+
+def test_the_run_summary_separates_carried_from_this_process():
+    # total_cost_usd stays the audit record of THIS process's JSONL;
+    # the carried and cumulative numbers get their own keys so a resumed
+    # scene's true cost is recoverable from the artifact.
+    telemetry.seed_prior_spend(5.0)
+    spend(0.5)
+    s = telemetry.get_run_log().summary()
+    assert s["total_cost_usd"] == 0.5
+    assert s["prior_spend_usd"] == 5.0
+    assert s["cumulative_cost_usd"] == 5.5
+
+
+# ── planner + budget: pause behavior lives in test_planner.py ──
 
 def test_a_zero_budget_is_shown_in_the_doctor_report(monkeypatch):
     from exec_producer import doctor
@@ -122,21 +139,22 @@ def test_a_zero_budget_is_shown_in_the_doctor_report(monkeypatch):
     assert "max_run_usd" in details
 
 
-def test_a_planned_turn_is_not_billed_when_the_budget_is_already_gone(monkeypatch):
-    # The graph's first routing check happens AFTER speak, so an exhausted
-    # budget still paid for one director call plus one character call. The
-    # classic loop gates at the top of its turn; this must match.
+def test_a_planned_turn_pauses_instead_of_billing_when_the_budget_is_gone(monkeypatch):
+    # direct_turn used to return {} here, which let `speak` run next — with
+    # a stale note mid-episode, or a KeyError at a scene's first turn
+    # (current_note never written). Raising pauses before either can happen.
     from exec_producer import planner
+    from exec_producer.errors import BudgetPause
 
     monkeypatch.setattr(telemetry, "MAX_RUN_USD", 0)
     monkeypatch.setattr(planner.engine, "get_director_choice",
                         lambda *a, **k: pytest.fail("billed the director past the cap"))
-    state = planner.direct_turn({
-        "scene_queue": [{"scene_id": "test", "lines": 3}], "scene_index": 0,
-        "turn_index": 0, "scene_cast": ["alpha"], "conversation": [],
-        "last_speaker": None, "intensity": "low", "plan": [],
-    })
-    assert state.get("director_note") in (None, {})
+    with pytest.raises(BudgetPause):
+        planner.direct_turn({
+            "scene_queue": [{"scene_id": "test", "lines": 3}], "scene_index": 0,
+            "turn_index": 0, "scene_cast": ["alpha"], "conversation": [],
+            "last_speaker": None, "intensity": "low", "plan": [],
+        })
 
 
 # ── episodes: no empty scenes ────────────────────────────
